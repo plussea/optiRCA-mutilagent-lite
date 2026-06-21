@@ -1,0 +1,30 @@
+[project]
+name = "optirc-lite"
+version = "0.1.0"
+description = "Lightweight State-Aware Runtime + Workflow RCA agent"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-multipart>=0.0.9",
+    "langgraph>=0.2.50",
+    "openai>=1.30.0",
+    "lancedb>=0.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+
+[tool.setuptools.packages.find]
+include = ["optirc_lite*"]
