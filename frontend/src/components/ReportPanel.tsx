@@ -7,10 +7,10 @@ interface Props {
 export function ReportPanel({ state }: Props) {
   if (!state) {
     return (
-      <section className="glass flex min-h-[420px] items-center justify-center rounded-3xl p-8 text-center shadow-soft">
+      <section className="glass flex min-h-[280px] items-center justify-center rounded-3xl p-8 text-center shadow-soft">
         <div>
           <p className="text-lg font-semibold text-ink">等待输入</p>
-          <p className="mt-2 text-sm text-slate-500">上传一份告警 CSV 后，这里会生成诊断报告。</p>
+          <p className="mt-2 text-sm text-slate-500">上传一份告警 CSV 后，这里会生成 Case Report。</p>
         </div>
       </section>
     );
@@ -32,7 +32,7 @@ export function ReportPanel({ state }: Props) {
         </span>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="mt-6 grid gap-4 md:grid-cols-3">
         <Card title="根因判断">
           <p className="text-base font-semibold text-ink">{diagnosis.root_cause ?? "暂无"}</p>
           <p className="mt-2 text-sm text-slate-500">
@@ -58,16 +58,11 @@ export function ReportPanel({ state }: Props) {
           <p className="text-sm text-slate-500">方案有效: {validation.solution_valid ? "是" : "否"}</p>
           <p className="mt-2 text-sm text-slate-500">风险等级: {validation.risk_level ?? "-"}</p>
           <p className="mt-2 text-sm text-slate-500">{validation.notes ?? ""}</p>
-        </Card>
-
-        <Card title="Runtime Trace">
-          <div className="space-y-2 text-xs text-slate-500">
-            {(state.decision_trace ?? []).map((trace, index) => (
-              <p key={`${trace.phase}-${index}`}>
-                {trace.phase}: {trace.skill ?? "none"} ({trace.reason})
-              </p>
-            ))}
-          </div>
+          {state.closure?.summary && (
+            <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-xs text-emerald-700">
+              {state.closure.summary}
+            </p>
+          )}
         </Card>
       </div>
     </section>

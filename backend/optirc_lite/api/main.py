@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -72,16 +73,21 @@ async def create_session(file: UploadFile = File(...)) -> Dict[str, Any]:
         "error_message": None,
     }
 
-    try:
-        final_state = await workflow.ainvoke(initial_state)
-        store.upsert_session(session_id, final_state.get("status", "unknown"), dict(final_state))
-        store.add_event(session_id, "workflow.completed", dict(final_state))
-    except Exception as exc:
-        error_state = {**initial_state, "status": "error", "error_message": str(exc)}
-        store.upsert_session(session_id, "error", error_state)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    store.upsert_session(session_id, "init", initial_state)
+    store.add_event(session_id, "workflow.submitted", {"filename": file.filename})
 
-    return {"session_id": session_id, "status": final_state.get("status")}
+    async def run_pipeline() -> None:
+        try:
+            final_state = await workflow.ainvoke(initial_state)
+            store.upsert_session(session_id, final_state.get("status", "unknown"), dict(final_state))
+            store.add_event(session_id, "workflow.completed", dict(final_state))
+        except Exception as exc:
+            error_state = {**initial_state, "status": "error", "error_message": str(exc)}
+            store.upsert_session(session_id, "error", error_state)
+            store.add_event(session_id, "workflow.error", {"error": str(exc)})
+
+    asyncio.create_task(run_pipeline())
+    return {"session_id": session_id, "status": "init"}
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -119,18 +125,20 @@ async def submit_human_decision(
         "decision": decision,
         "notes": notes,
     }
+    store.add_event(session_id, "human.decision", {"decision": decision, "notes": notes})
 
     if decision == "approved":
+        store.add_event(session_id, "closure.start", {"input": state.get("human_review", {})})
         closure_update = await closure_runtime.run_phase("closure", state)
         state.update(closure_update)
         state["status"] = "closed"
+        store.add_event(session_id, "closure.end", {"status": "closed", "output": state.get("closure", {})})
     elif decision == "rejected":
         state["status"] = "rejected"
     else:
         state["status"] = "escalated"
 
     store.upsert_session(session_id, state["status"], state)
-    store.add_event(session_id, "human.decision", {"decision": decision, "notes": notes})
     return {"session_id": session_id, "status": state["status"], "human_decision": decision}
 
 

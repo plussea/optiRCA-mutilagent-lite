@@ -13,12 +13,12 @@ export function UploadCard({ busy, onUpload }: Props) {
           <p className="text-sm font-semibold text-brand">OptiRCA Lite</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-ink">轻量根因分析工作台</h1>
           <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
-            上传 CSV 告警，系统会通过编译时 Workflow 推进流程，并在每个阶段由 State-Aware Runtime 选择合适 Skill。
+            上传 CSV 告警后，系统会异步运行编译时 Workflow，并在每个节点记录审计事件、运行状态和 Skill 输出。
           </p>
         </div>
         <label className="group flex cursor-pointer items-center gap-3 rounded-2xl bg-ink px-5 py-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black">
           <UploadCloud className="h-5 w-5" />
-          {busy ? "分析中..." : "上传 CSV"}
+          {busy ? "提交中..." : "上传 CSV"}
           <input
             type="file"
             accept=".csv"

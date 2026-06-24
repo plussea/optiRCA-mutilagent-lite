@@ -19,7 +19,7 @@ export function ReviewPanel({ state, onDecision }: Props) {
         </div>
         <div>
           <h2 className="text-sm font-bold text-amber-900">需要人工审核</h2>
-          <p className="text-xs text-amber-700">批准后将写入本地知识库；驳回或升级会结束本次流程。</p>
+          <p className="text-xs text-amber-700">批准后写入本地知识库，驳回或升级会结束本次流程。</p>
         </div>
       </div>
       <textarea

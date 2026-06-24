@@ -1,4 +1,4 @@
-import type { SessionState } from "./types";
+import type { SessionState, WorkflowEvent } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8010";
 
@@ -21,6 +21,15 @@ export async function fetchSession(sessionId: string): Promise<SessionState> {
     throw new Error(await response.text());
   }
   return response.json();
+}
+
+export async function fetchEvents(sessionId: string): Promise<WorkflowEvent[]> {
+  const response = await fetch(`${API_URL}/v1/sessions/${sessionId}/events`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const body = await response.json();
+  return body.events ?? [];
 }
 
 export async function submitDecision(

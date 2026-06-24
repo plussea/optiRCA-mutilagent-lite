@@ -1,5 +1,11 @@
 export type SessionStatus =
   | "init"
+  | "perception_running"
+  | "diagnosis_running"
+  | "validation_running"
+  | "planning_running"
+  | "solution_validation_running"
+  | "human_review_running"
   | "perceived"
   | "diagnosed"
   | "diagnosis_validated"
@@ -27,4 +33,10 @@ export interface SessionState {
   tool_calls?: Array<Record<string, any>>;
   decision_trace?: Array<Record<string, any>>;
   error_message?: string | null;
+}
+
+export interface WorkflowEvent {
+  phase: string;
+  payload: Record<string, any>;
+  created_at: string;
 }
