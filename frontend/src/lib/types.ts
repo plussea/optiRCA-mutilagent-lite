@@ -6,6 +6,7 @@ export type SessionStatus =
   | "planning_running"
   | "solution_validation_running"
   | "human_review_running"
+  | "closure_running"
   | "perceived"
   | "diagnosed"
   | "diagnosis_validated"

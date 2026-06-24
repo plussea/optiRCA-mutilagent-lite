@@ -42,19 +42,10 @@ workflow = build_workflow()
 closure_runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
 
 
-@app.post("/v1/sessions")
-async def create_session(file: UploadFile = File(...)) -> Dict[str, Any]:
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="当前 Lite 版本仅支持 CSV 文件")
-
-    session_id = str(uuid.uuid4())
-    target = settings.upload_dir / f"{session_id}_{Path(file.filename).name}"
-    with target.open("wb") as handle:
-        shutil.copyfileobj(file.file, handle)
-
-    initial_state: AgentState = {
+def _initial_state(session_id: str, raw_input: Path) -> AgentState:
+    return {
         "session_id": session_id,
-        "raw_input": str(target),
+        "raw_input": str(raw_input),
         "status": "init",
         "pending_human": False,
         "human_decision": None,
@@ -73,8 +64,10 @@ async def create_session(file: UploadFile = File(...)) -> Dict[str, Any]:
         "error_message": None,
     }
 
+
+def _submit_workflow(session_id: str, initial_state: AgentState, source_name: str) -> None:
     store.upsert_session(session_id, "init", initial_state)
-    store.add_event(session_id, "workflow.submitted", {"filename": file.filename})
+    store.add_event(session_id, "workflow.submitted", {"filename": source_name})
 
     async def run_pipeline() -> None:
         try:
@@ -87,7 +80,34 @@ async def create_session(file: UploadFile = File(...)) -> Dict[str, Any]:
             store.add_event(session_id, "workflow.error", {"error": str(exc)})
 
     asyncio.create_task(run_pipeline())
+
+
+@app.post("/v1/sessions")
+async def create_session(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="当前 Lite 版本仅支持 CSV 文件")
+
+    session_id = str(uuid.uuid4())
+    target = settings.upload_dir / f"{session_id}_{Path(file.filename).name}"
+    with target.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+
+    _submit_workflow(session_id, _initial_state(session_id, target), file.filename)
     return {"session_id": session_id, "status": "init"}
+
+
+@app.post("/v1/demo-session")
+async def create_demo_session() -> Dict[str, Any]:
+    demo_source = Path(__file__).resolve().parents[3] / "examples" / "true_example.csv"
+    if not demo_source.exists():
+        raise HTTPException(status_code=404, detail="examples/true_example.csv not found")
+
+    session_id = str(uuid.uuid4())
+    target = settings.upload_dir / f"{session_id}_true_example.csv"
+    shutil.copyfile(demo_source, target)
+
+    _submit_workflow(session_id, _initial_state(session_id, target), "true_example.csv")
+    return {"session_id": session_id, "status": "init", "demo": "true_example.csv"}
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -129,6 +149,7 @@ async def submit_human_decision(
 
     if decision == "approved":
         store.add_event(session_id, "closure.start", {"input": state.get("human_review", {})})
+        store.upsert_session(session_id, "closure_running", {**state, "status": "closure_running"})
         closure_update = await closure_runtime.run_phase("closure", state)
         state.update(closure_update)
         state["status"] = "closed"

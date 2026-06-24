@@ -12,21 +12,21 @@ export function ReviewPanel({ state, onDecision }: Props) {
   if (!state?.pending_human) return null;
 
   return (
-    <section className="rounded-3xl border border-amber-200 bg-amber-50/90 p-5 shadow-soft">
+    <section className="rounded-[2rem] border border-amber-300/30 bg-amber-400/10 p-5 shadow-soft">
       <div className="flex items-center gap-3">
-        <div className="rounded-2xl bg-amber-100 p-3 text-amber-700">
+        <div className="rounded-2xl bg-amber-300/15 p-3 text-amber-200">
           <AlertTriangle className="h-5 w-5" />
         </div>
         <div>
-          <h2 className="text-sm font-bold text-amber-900">需要人工审核</h2>
-          <p className="text-xs text-amber-700">批准后写入本地知识库，驳回或升级会结束本次流程。</p>
+          <h2 className="text-sm font-bold text-amber-100">需要人工审核</h2>
+          <p className="text-xs text-amber-200/80">批准后进入经验回收，驳回或升级会结束本次流程。</p>
         </div>
       </div>
       <textarea
         value={notes}
         onChange={(event) => setNotes(event.target.value)}
         placeholder="填写审核意见..."
-        className="mt-4 h-24 w-full resize-none rounded-2xl border border-amber-200 bg-white/80 p-3 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        className="mt-4 h-24 w-full resize-none rounded-2xl border border-amber-300/30 bg-slate-950/55 p-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-amber-300/40"
       />
       <div className="mt-4 grid grid-cols-3 gap-2">
         <button className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white" onClick={() => onDecision("approved", notes)}>

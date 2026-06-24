@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createSession, fetchEvents, fetchSession, submitDecision } from "./lib/api";
+import { createDemoSession, createSession, fetchEvents, fetchSession, submitDecision } from "./lib/api";
 import type { SessionState, WorkflowEvent } from "./lib/types";
 import { AuditTrail } from "./components/AuditTrail";
 import { NodeInspector } from "./components/NodeInspector";
@@ -64,6 +64,23 @@ export function App() {
     }
   }
 
+  async function handleRunDemo() {
+    setBusy(true);
+    setError(null);
+    setEvents([]);
+    setState(null);
+    setSelectedNode("perception");
+    try {
+      const created = await createDemoSession();
+      await refresh(created.session_id);
+      startPolling(created.session_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDecision(decision: "approved" | "rejected" | "escalated", notes: string) {
     if (!state) return;
     setBusy(true);
@@ -79,18 +96,18 @@ export function App() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-mist">
+    <main className="runtime-grid min-h-screen overflow-hidden bg-mist">
       <div className="pointer-events-none fixed -left-32 -top-32 h-96 w-96 rounded-full bg-brand/20 blur-3xl" />
-      <div className="pointer-events-none fixed -bottom-40 right-0 h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl" />
-      <div className="relative mx-auto max-w-7xl space-y-6 px-6 py-8">
-        <UploadCard busy={busy} onUpload={handleUpload} />
+      <div className="pointer-events-none fixed -bottom-40 right-0 h-96 w-96 rounded-full bg-cyanline/20 blur-3xl" />
+      <div className="relative mx-auto max-w-[1540px] space-y-6 px-6 py-8">
+        <UploadCard busy={busy} onUpload={handleUpload} onRunDemo={handleRunDemo} />
         {error && (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+          <div className="rounded-2xl border border-rose-400/40 bg-rose-950/60 p-4 text-sm text-rose-100">
             {error}
           </div>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
           <WorkflowGraph
             state={state}
             events={events}
@@ -100,7 +117,7 @@ export function App() {
           <NodeInspector state={state} events={events} selectedNode={selectedNode} />
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
           <ReportPanel state={state} />
           <div className="space-y-6">
             <ReviewPanel state={state} onDecision={handleDecision} />

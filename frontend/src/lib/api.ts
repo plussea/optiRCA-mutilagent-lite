@@ -15,6 +15,16 @@ export async function createSession(file: File): Promise<{ session_id: string; s
   return response.json();
 }
 
+export async function createDemoSession(): Promise<{ session_id: string; status: string }> {
+  const response = await fetch(`${API_URL}/v1/demo-session`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+}
+
 export async function fetchSession(sessionId: string): Promise<SessionState> {
   const response = await fetch(`${API_URL}/v1/sessions/${sessionId}`);
   if (!response.ok) {
