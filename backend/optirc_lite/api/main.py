@@ -4,10 +4,11 @@ import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from optirc_lite.config import settings
 from optirc_lite.runtime.agent_runtime import AgentRuntime
@@ -100,6 +101,23 @@ def _degraded_parse_response(reason: str, exc: Exception | None = None) -> Dict[
     }
 
 
+class JudgeRankRequest(BaseModel):
+    fact_table: Dict[str, Any]
+    evidence_graph: Dict[str, Any]
+
+
+def _degraded_judge_response(reason: str, exc: Exception | None = None) -> Dict[str, Any]:
+    return {
+        "status": "degraded",
+        "candidates": [],
+        "confidence": 0.0,
+        "suggestion": "Judge/Ranker 失败或证据不足，请人工复核证据图。",
+        "requires_human_review": True,
+        "degradation_reason": reason,
+        "error": str(exc) if exc else None,
+    }
+
+
 @app.post("/v1/refactor/parse")
 async def refactor_parse(
     alarms: UploadFile = File(...),
@@ -158,6 +176,58 @@ async def refactor_parse(
         "session_id": session_id,
         "fact_table": state["perception"],
         "evidence_graph": EvidenceGraph()._read(),
+    }
+
+
+@app.post("/v1/refactor/judge-rank")
+async def refactor_judge_rank(request: JudgeRankRequest) -> Dict[str, Any]:
+    session_id = str(uuid.uuid4())
+    graph = EvidenceGraph()
+    graph.init()
+    graph._write(request.evidence_graph)
+
+    if not request.evidence_graph.get("nodes") or request.fact_table.get("alarm_count", 0) == 0:
+        return _degraded_judge_response("empty_evidence")
+
+    state: AgentState = {
+        "session_id": session_id,
+        "raw_input": "",
+        "perception": request.fact_table,
+        "evidence_graph": request.evidence_graph,
+        "status": "init",
+        "pending_human": False,
+        "human_decision": None,
+        "retry_count": 0,
+        "diagnosis": {},
+        "validation": {},
+        "planning": {},
+        "solution_validation": {},
+        "human_review": {},
+        "closure": {},
+        "runtime_context": {},
+        "observations": [],
+        "tool_calls": [],
+        "decision_trace": [],
+        "error_message": None,
+    }
+
+    try:
+        judge_update = await refactor_runtime.run_phase("judge", state)
+        state.update(judge_update)
+        if "judge" not in state or not state["judge"] or not state["judge"].get("candidates"):
+            return _degraded_judge_response("judge_failure")
+
+        rank_update = await refactor_runtime.run_phase("rank", state)
+        state.update(rank_update)
+        if "rank" not in state or not state["rank"]:
+            return _degraded_judge_response("rank_failure")
+    except Exception as exc:
+        return _degraded_judge_response("agent_failure", exc)
+
+    return {
+        "status": "judged",
+        "session_id": session_id,
+        "candidates": state["rank"]["candidates"],
     }
 
 

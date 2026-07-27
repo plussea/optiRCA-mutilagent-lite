@@ -22,6 +22,29 @@ class PerceptionSkillOutput(SkillOutput):
     result: PerceptionResult = Field(default_factory=PerceptionResult)
 
 
+class Candidate(BaseModel):
+    root_cause: str = "unknown"
+    confidence: float = 0.0
+    score_vector: List[float] = Field(default_factory=list)
+    evidence_chain: List[str] = Field(default_factory=list)
+
+
+class JudgeResult(BaseModel):
+    candidates: List[Candidate] = Field(default_factory=list)
+
+
+class JudgeSkillOutput(SkillOutput):
+    result: JudgeResult = Field(default_factory=JudgeResult)
+
+
+class RankResult(BaseModel):
+    candidates: List[Candidate] = Field(default_factory=list)
+
+
+class RankSkillOutput(SkillOutput):
+    result: RankResult = Field(default_factory=RankResult)
+
+
 class DiagnosisResult(BaseModel):
     root_cause: str = "unknown"
     confidence: float = 0.0
