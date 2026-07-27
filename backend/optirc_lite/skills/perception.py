@@ -25,10 +25,13 @@ class AlarmPerceptionSkill:
         alarm_col = self._pick(first, ["alarm_type", "alarm_name", "名称", "告警名称", "name"])
         device_col = self._pick(first, ["device_id", "device", "source", "告警源", "网元", "ne_id"])
         location_col = self._pick(first, ["location", "定位信息", "description", "desc"])
+        time_col = self._pick(first, ["timestamp", "time", "时间", "告警时间"])
+        severity_col = self._pick(first, ["severity", "级别", "level"])
 
+        alarms = []
         alarm_types = []
         devices = []
-        for row in rows:
+        for idx, row in enumerate(rows):
             alarm = str(row.get(alarm_col, "")).strip() if alarm_col else ""
             device = str(row.get(device_col, "")).strip() if device_col else ""
             if alarm and alarm not in alarm_types:
@@ -36,11 +39,22 @@ class AlarmPerceptionSkill:
             if device and device not in devices:
                 devices.append(device)
 
+            alarms.append({
+                "alarm_id": f"ALM-{idx:04d}",
+                "type": alarm,
+                "severity": str(row.get(severity_col, "")).strip() if severity_col else "",
+                "timestamp": str(row.get(time_col, "")).strip() if time_col else "",
+                "device_id": device,
+                "port_id": "",
+                "raw_text": str(row),
+            })
+
         result = {
             "input_name": Path(state["raw_input"]).name,
-            "row_count": len(rows),
+            "alarm_count": len(rows),
             "headers": parsed["headers"],
             "first_row": first,
+            "alarms": alarms,
             "alarm_types": alarm_types[:10],
             "devices": devices[:20],
             "primary_alarm": alarm_types[0] if alarm_types else "unknown",
@@ -52,7 +66,7 @@ class AlarmPerceptionSkill:
             "confidence": 0.9 if rows else 0.2,
             "evidence": [f"解析到 {len(rows)} 条告警", f"识别设备 {len(devices)} 个"],
             "observations": [{"type": "csv_summary", "value": result}],
-            "next_suggestions": ["diagnosis.root_cause"],
+            "next_suggestions": ["topology.topology_builder"],
         }
 
     @staticmethod

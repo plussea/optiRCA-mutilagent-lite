@@ -31,6 +31,15 @@ class EvidenceNode(BaseModel):
     # Flexible domain properties beyond the common ones
     properties: Dict[str, Any] = Field(default_factory=dict)
 
+    def __init__(self, **data):
+        # Extract known fields; everything else goes into properties.
+        known = {"id", "type", "properties"}
+        properties = data.pop("properties", {}) or {}
+        for key in list(data.keys()):
+            if key not in known:
+                properties[key] = data.pop(key)
+        super().__init__(properties=properties, **data)
+
     # Required-ish fields per type, stored in properties for forward compatibility
     @model_validator(mode="after")
     def ensure_type_fields(self):

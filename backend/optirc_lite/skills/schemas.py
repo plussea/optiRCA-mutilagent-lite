@@ -7,7 +7,8 @@ from optirc_lite.skills.base import SkillInput, SkillOutput
 
 class PerceptionResult(BaseModel):
     input_name: str = ""
-    row_count: int = 0
+    alarm_count: int = 0
+    alarms: List[Dict[str, Any]] = Field(default_factory=list)
     headers: List[str] = Field(default_factory=list)
     first_row: Dict[str, Any] = Field(default_factory=dict)
     alarm_types: List[str] = Field(default_factory=list)

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -11,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from optirc_lite.config import settings
 from optirc_lite.runtime.agent_runtime import AgentRuntime
 from optirc_lite.skills.builtin import create_builtin_skills
+from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph
 from optirc_lite.storage.graph_store import graph_store
 from optirc_lite.storage.sqlite_store import store
 from optirc_lite.storage.vector_store import vector_store
@@ -26,6 +28,7 @@ async def lifespan(app: FastAPI):
     store.init()
     vector_store.init()
     graph_store.init()
+    evidence_graph.init()
     yield
 
 
@@ -40,6 +43,7 @@ app.add_middleware(
 
 workflow = build_workflow()
 closure_runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
+refactor_runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
 
 
 def _initial_state(session_id: str, raw_input: Path) -> AgentState:
@@ -80,6 +84,81 @@ def _submit_workflow(session_id: str, initial_state: AgentState, source_name: st
             store.add_event(session_id, "workflow.error", {"error": str(exc)})
 
     asyncio.create_task(run_pipeline())
+
+
+def _degraded_parse_response(reason: str, exc: Exception | None = None) -> Dict[str, Any]:
+    return {
+        "status": "degraded",
+        "root_cause": {},
+        "evidence_chain": [],
+        "confidence": 0.0,
+        "dossier_id": None,
+        "suggestion": "解析或拓扑构建失败，请人工复核告警与拓扑数据。",
+        "requires_human_review": True,
+        "degradation_reason": reason,
+        "error": str(exc) if exc else None,
+    }
+
+
+@app.post("/v1/refactor/parse")
+async def refactor_parse(
+    alarms: UploadFile = File(...),
+    topology: str = Form(...),
+) -> Dict[str, Any]:
+    if not alarms.filename or not alarms.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="仅支持 CSV 告警文件")
+
+    try:
+        topology_data = json.loads(topology)
+    except json.JSONDecodeError as exc:
+        return _degraded_parse_response("invalid_topology", exc)
+
+    session_id = str(uuid.uuid4())
+    target = settings.upload_dir / f"{session_id}_{Path(alarms.filename).name}"
+    with target.open("wb") as handle:
+        shutil.copyfileobj(alarms.file, handle)
+
+    state: AgentState = {
+        "session_id": session_id,
+        "raw_input": str(target),
+        "topology": topology_data,
+        "status": "init",
+        "pending_human": False,
+        "human_decision": None,
+        "retry_count": 0,
+        "perception": {},
+        "diagnosis": {},
+        "validation": {},
+        "planning": {},
+        "solution_validation": {},
+        "human_review": {},
+        "closure": {},
+        "runtime_context": {},
+        "observations": [],
+        "tool_calls": [],
+        "decision_trace": [],
+        "error_message": None,
+    }
+
+    try:
+        perception_update = await refactor_runtime.run_phase("perception", state)
+        state.update(perception_update)
+        if "perception" not in state or not state["perception"]:
+            return _degraded_parse_response("perception_failure")
+
+        topology_update = await refactor_runtime.run_phase("topology", state)
+        state.update(topology_update)
+        if "topology" not in state or not state["topology"]:
+            return _degraded_parse_response("topology_failure")
+    except Exception as exc:
+        return _degraded_parse_response("agent_failure", exc)
+
+    return {
+        "status": "perceived",
+        "session_id": session_id,
+        "fact_table": state["perception"],
+        "evidence_graph": EvidenceGraph()._read(),
+    }
 
 
 @app.post("/v1/sessions")
