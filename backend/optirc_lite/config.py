@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     lancedb_table: str = "knowledge"
     embedding_dimension: int = 64
     graph_path: Path = Path("data/knowledge_graph.json")
+    evidence_graph_path: Path = Path("data/evidence_graph.json")
 
     llm_base_url: str = ""
     llm_api_key: str = ""
