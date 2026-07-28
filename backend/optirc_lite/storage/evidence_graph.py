@@ -3,7 +3,7 @@
 import json
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -215,5 +215,183 @@ class EvidenceGraph:
                 return EvidenceNode.from_dict({**n})
         return None
 
+    @staticmethod
+    def parse_node_id(node_id: str) -> Tuple[Optional[NodeType], str]:
+        """Parse a node id like dev:olt-a into (NodeType, local_id)."""
+        if ":" not in node_id:
+            return None, node_id
+        prefix, local_id = node_id.split(":", 1)
+        mapping = {
+            "dev": NodeType.DEVICE,
+            "port": NodeType.PORT,
+            "link": NodeType.LINK,
+            "alm": NodeType.ALARM,
+            "svc": NodeType.SERVICE,
+        }
+        return mapping.get(prefix), local_id
 
+    def get_alarms_for_node(self, node_id: str) -> List[EvidenceNode]:
+        """Return all ALARM nodes that belong to this node or its descendants.
+
+        For a device, includes alarms on the device itself and on its ports.
+        For a port, includes alarms on the port itself.
+        For a link, includes alarms on both endpoint ports/devices.
+        """
+        node_type, _ = self.parse_node_id(node_id)
+        if node_type is None:
+            return []
+
+        data = self._read()
+        nodes = {n["id"]: EvidenceNode.from_dict({**n}) for n in data.get("nodes", [])}
+        edges = [EvidenceEdge.from_dict({**e}) for e in data.get("edges", [])]
+
+        belongs = {e.source: e.target for e in edges if e.type == EdgeType.BELONGS_TO}
+        topo = [e for e in edges if e.type == EdgeType.TOPOLOGY]
+
+        covered: Set[str] = set()
+
+        if node_type == NodeType.DEVICE:
+            covered.add(node_id)
+            _, local_id = self.parse_node_id(node_id)
+            # Topology-linked ports
+            for edge in topo:
+                if edge.source == node_id:
+                    covered.add(edge.target)
+                elif edge.target == node_id:
+                    covered.add(edge.source)
+            # Ports that declare this device as their parent even without a topology edge
+            for node in nodes.values():
+                if node.type == NodeType.PORT and node.properties.get("device_id") == local_id:
+                    covered.add(node.id)
+
+        elif node_type == NodeType.PORT:
+            covered.add(node_id)
+            # Include topology-linked neighbors (parent device, attached link)
+            for edge in topo:
+                if edge.source == node_id:
+                    covered.add(edge.target)
+                elif edge.target == node_id:
+                    covered.add(edge.source)
+
+        elif node_type == NodeType.LINK:
+            link_node = nodes.get(node_id)
+            if link_node:
+                endpoints = {
+                    link_node.properties.get("endpoint_a"),
+                    link_node.properties.get("endpoint_b"),
+                }
+                for endpoint in endpoints:
+                    if not endpoint:
+                        continue
+                    port_id = f"port:{endpoint}"
+                    covered.add(port_id)
+                    for edge in topo:
+                        if edge.source == port_id:
+                            covered.add(edge.target)
+                        elif edge.target == port_id:
+                            covered.add(edge.source)
+
+        alarm_ids = {alarm_id for alarm_id, target in belongs.items() if target in covered}
+        return [nodes[alarm_id] for alarm_id in alarm_ids if alarm_id in nodes]
+
+    def get_neighbors_by_type(
+        self,
+        node_id: str,
+        edge_type: EdgeType,
+        direction: str = "both",
+    ) -> EvidenceSubgraph:
+        """Return neighbors reachable via edges of the given type."""
+        data = self._read()
+        node_index = {n["id"]: n for n in data.get("nodes", [])}
+        edges = [
+            EvidenceEdge.from_dict({**e})
+            for e in data.get("edges", [])
+            if e.get("type") == edge_type.value
+        ]
+
+        matched: List[EvidenceEdge] = []
+        visited: Set[str] = {node_id}
+        for edge in edges:
+            if direction in {"out", "both"} and edge.source == node_id:
+                matched.append(edge)
+                visited.add(edge.target)
+            if direction in {"in", "both"} and edge.target == node_id:
+                matched.append(edge)
+                visited.add(edge.source)
+
+        return EvidenceSubgraph(
+            nodes=[EvidenceNode.from_dict({**node_index[nid]}) for nid in visited if nid in node_index],
+            edges=matched,
+        )
+
+    def build_propagates_edges(self) -> None:
+        """Create PROPAGATES edges from Port/Link nodes to their reachable Alarms."""
+        data = self._read()
+        nodes = {n["id"]: EvidenceNode.from_dict({**n}) for n in data.get("nodes", [])}
+        edges = [EvidenceEdge.from_dict({**e}) for e in data.get("edges", [])]
+
+        belongs = {e.source: e.target for e in edges if e.type == EdgeType.BELONGS_TO}
+        topo = [e for e in edges if e.type == EdgeType.TOPOLOGY]
+
+        # port -> device
+        port_to_device: Dict[str, str] = {}
+        for edge in topo:
+            if edge.source.startswith("port:") and edge.target.startswith("dev:"):
+                port_to_device[edge.source] = edge.target
+            elif edge.source.startswith("dev:") and edge.target.startswith("port:"):
+                port_to_device[edge.target] = edge.source
+
+        # link -> ports
+        link_to_ports: Dict[str, Set[str]] = {}
+        for link in nodes.values():
+            if link.type != NodeType.LINK:
+                continue
+            ports_set: Set[str] = set()
+            for endpoint in (link.properties.get("endpoint_a"), link.properties.get("endpoint_b")):
+                if endpoint:
+                    ports_set.add(f"port:{endpoint}")
+            link_to_ports[link.id] = ports_set
+
+        existing = {(e.source, e.target) for e in edges if e.type == EdgeType.PROPAGATES}
+
+        def alarms_for_target(target: str) -> Set[str]:
+            result: Set[str] = set()
+            for alarm_id, belongs_to in belongs.items():
+                if belongs_to == target:
+                    result.add(alarm_id)
+                elif belongs_to == port_to_device.get(target):
+                    result.add(alarm_id)
+            return result
+
+        new_edges: List[Dict[str, Any]] = []
+
+        for port_id in nodes:
+            if not port_id.startswith("port:"):
+                continue
+            for alarm_id in alarms_for_target(port_id):
+                key = (port_id, alarm_id)
+                if key in existing:
+                    continue
+                existing.add(key)
+                new_edges.append(
+                    EvidenceEdge(source=port_id, target=alarm_id, type=EdgeType.PROPAGATES, confidence=1.0).model_dump()
+                )
+
+        for link_id, ports in link_to_ports.items():
+            for port_id in ports:
+                for alarm_id in alarms_for_target(port_id):
+                    key = (link_id, alarm_id)
+                    if key in existing:
+                        continue
+                    existing.add(key)
+                    new_edges.append(
+                        EvidenceEdge(source=link_id, target=alarm_id, type=EdgeType.PROPAGATES, confidence=1.0).model_dump()
+                    )
+
+        data.setdefault("edges", []).extend(new_edges)
+        self._write(data)
+
+
+# Module-level singleton for callers that don't manage their own graph path.
 evidence_graph = EvidenceGraph()
+

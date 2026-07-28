@@ -36,6 +36,7 @@ class TopologyBuilderSkill:
         port_nodes = self._build_ports(topology, graph, device_nodes)
         self._build_links(topology, graph, port_nodes)
         self._build_alarms(fact_table, graph)
+        graph.build_propagates_edges()
 
         return {
             "result": {
@@ -60,7 +61,7 @@ class TopologyBuilderSkill:
         mapping: Dict[str, str] = {}
         for device in topology.get("devices", []):
             device_id = device["device_id"]
-            node_id = f"dev:{device_id}"
+            node_id = device_id if device_id.startswith("dev:") else f"dev:{device_id}"
             graph.add_node(
                 EvidenceNode(
                     id=node_id,
@@ -84,7 +85,7 @@ class TopologyBuilderSkill:
         mapping: Dict[str, str] = {}
         for port in topology.get("ports", []):
             port_id = port["port_id"]
-            node_id = f"port:{port_id}"
+            node_id = port_id if port_id.startswith("port:") else f"port:{port_id}"
             device_id = port.get("device_id")
             graph.add_node(
                 EvidenceNode(
@@ -119,7 +120,7 @@ class TopologyBuilderSkill:
             link_id = link["link_id"]
             endpoint_a = link.get("endpoint_a")
             endpoint_b = link.get("endpoint_b")
-            node_id = f"link:{link_id}"
+            node_id = link_id if link_id.startswith("link:") else f"link:{link_id}"
             graph.add_node(
                 EvidenceNode(
                     id=node_id,
@@ -157,7 +158,7 @@ class TopologyBuilderSkill:
         device_ids = {n.properties.get("device_id") for n in graph.get_nodes(NodeType.DEVICE)}
         for alarm in alarms:
             alarm_id = alarm.get("alarm_id")
-            node_id = f"alm:{alarm_id}"
+            node_id = alarm_id if alarm_id.startswith("alm:") else f"alm:{alarm_id}"
             port_id = alarm.get("port_id")
             device_id = alarm.get("device_id")
             graph.add_node(
@@ -175,9 +176,9 @@ class TopologyBuilderSkill:
             )
             target = None
             if port_id:
-                target = f"port:{port_id}"
+                target = port_id if port_id.startswith("port:") else f"port:{port_id}"
             elif device_id and device_id in device_ids:
-                target = f"dev:{device_id}"
+                target = device_id if device_id.startswith("dev:") else f"dev:{device_id}"
 
             if target:
                 try:

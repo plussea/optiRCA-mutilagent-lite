@@ -5,9 +5,7 @@ from typing import Any, Dict, List, Set
 from optirc_lite.skills.base import SkillOutput
 from optirc_lite.skills.schemas import DefaultSkillInput, JudgeSkillOutput
 from optirc_lite.storage.evidence_graph import (
-    EdgeType,
     EvidenceGraph,
-    EvidenceNode,
     NodeType,
 )
 from optirc_lite.tools.registry import ToolRegistry
@@ -31,48 +29,28 @@ class PropagationJudgeSkill:
         alarms = {n.id: n for n in graph.get_nodes(NodeType.ALARM)}
         links = graph.get_nodes(NodeType.LINK)
         devices = graph.get_nodes(NodeType.DEVICE)
-        ports = graph.get_nodes(NodeType.PORT)
-
-        # Build quick lookup indexes
-        belongs = graph.get_edges(EdgeType.BELONGS_TO)
-        topo = graph.get_edges(EdgeType.TOPOLOGY)
-
-        alarm_to_target: Dict[str, str] = {e.source: e.target for e in belongs}
-        target_to_alarms: Dict[str, List[str]] = {}
-        for e in belongs:
-            target_to_alarms.setdefault(e.target, []).append(e.source)
-
-        topo_source_to_target: Dict[str, str] = {e.source: e.target for e in topo}
-        topo_target_to_source: Dict[str, str] = {e.target: e.source for e in topo}
 
         candidates: List[Dict[str, Any]] = []
         seen: Set[str] = set()
 
         # Link candidates: a broken link often produces LOS/MUT_LOS on both endpoints.
+        ports = graph.get_nodes(NodeType.PORT)
+        port_by_property = {p.properties.get("port_id", p.id): p.id for p in ports}
+
         for link in links:
             link_id = link.properties.get("link_id", link.id)
-            endpoint_a = link.properties.get("endpoint_a")
-            endpoint_b = link.properties.get("endpoint_b")
+            key = f"link:{link_id}"
             chain_alarms: List[str] = []
 
-            for endpoint in (endpoint_a, endpoint_b):
+            for endpoint in (link.properties.get("endpoint_a"), link.properties.get("endpoint_b")):
                 if not endpoint:
                     continue
-                # endpoint is a port id; resolve to device if needed
-                port_node = next((p for p in ports if p.properties.get("port_id") == endpoint), None)
-                device_id = port_node.properties.get("device_id") if port_node else None
-                alarm_ids = target_to_alarms.get(f"port:{endpoint}", [])
-                if device_id:
-                    alarm_ids.extend(target_to_alarms.get(f"dev:{device_id}", []))
-                for alarm_id in set(alarm_ids):
-                    alarm = alarms.get(alarm_id)
-                    if alarm:
-                        chain_alarms.append(
-                            f"{alarm.properties.get('alarm_type', 'alarm')} @ {device_id or endpoint}"
-                        )
+                port_node_id = port_by_property.get(endpoint, f"port:{endpoint}")
+                for alarm in graph.get_alarms_for_node(port_node_id):
+                    alarm_type = alarm.properties.get("alarm_type", "alarm")
+                    chain_alarms.append(f"{alarm_type} @ {endpoint}")
 
             if chain_alarms:
-                key = f"link:{link_id}"
                 seen.add(key)
                 candidates.append(
                     {
@@ -81,7 +59,7 @@ class PropagationJudgeSkill:
                         "score_vector": [],
                         "evidence_chain": [
                             f"candidate root cause: {key}",
-                            f"endpoints: {endpoint_a or '-'} / {endpoint_b or '-'}",
+                            f"endpoints: {link.properties.get('endpoint_a') or '-'} / {link.properties.get('endpoint_b') or '-'}",
                             *chain_alarms,
                         ],
                     }
@@ -89,8 +67,8 @@ class PropagationJudgeSkill:
 
         # Device candidates for any alarm-bearing device not already covered by a link.
         for device in devices:
-            device_id = device.properties.get("device_id", device.id)
-            alarm_ids = target_to_alarms.get(f"dev:{device_id}", [])
+            _, device_id = graph.parse_node_id(device.id)
+            alarm_ids = {a.id for a in graph.get_alarms_for_node(device.id)}
             if not alarm_ids:
                 continue
             key = f"dev:{device_id}"

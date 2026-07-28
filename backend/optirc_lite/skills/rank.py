@@ -36,7 +36,7 @@ class RootCauseRankerSkill:
 
         scored = []
         for candidate in candidates:
-            score = self._score(candidate, alarms, total_alarms, has_fiber_cut)
+            score = self._score(candidate, alarms, total_alarms, has_fiber_cut, graph)
             candidate["score_vector"] = score
             candidate["confidence"] = round(sum(score) / max(len(score), 1), 3)
             scored.append(candidate)
@@ -57,6 +57,7 @@ class RootCauseRankerSkill:
         alarms: Dict[str, Any],
         total_alarms: int,
         has_fiber_cut: bool,
+        graph: EvidenceGraph,
     ) -> List[float]:
         root_cause = candidate.get("root_cause", "")
         evidence_chain = candidate.get("evidence_chain", [])
@@ -95,10 +96,11 @@ class RootCauseRankerSkill:
         case_sim = 0.5
 
         # conflict: low when candidate root cause type matches alarm pattern
+        node_type, _ = graph.parse_node_id(root_cause)
         conflict = 0.9
-        if has_fiber_cut and root_cause.startswith("link:"):
+        if has_fiber_cut and node_type == NodeType.LINK:
             conflict = 1.0
-        elif root_cause.startswith("dev:") and has_fiber_cut:
+        elif node_type == NodeType.DEVICE and has_fiber_cut:
             conflict = 0.6
 
         return [upstream, time_lead, coverage, priority, case_sim, conflict]

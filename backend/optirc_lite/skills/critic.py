@@ -8,9 +8,7 @@ from optirc_lite.skills.schemas import (
     ValidationSkillOutput,
 )
 from optirc_lite.storage.evidence_graph import (
-    EdgeType,
     EvidenceGraph,
-    EvidenceNode,
     NodeType,
 )
 from optirc_lite.tools.registry import ToolRegistry
@@ -93,45 +91,20 @@ class RefactorCriticSkill:
         candidates: List[Dict[str, Any]] = state.get("candidates", [])
         graph = EvidenceGraph()
 
-        alarms = {n.id: n for n in graph.get_nodes(NodeType.ALARM)}
-        all_alarm_ids = set(alarms.keys())
-        belongs = graph.get_edges(EdgeType.BELONGS_TO)
-        topo = graph.get_edges(EdgeType.TOPOLOGY)
-
-        # Build alarm -> target and target -> alarm(s) indexes
-        alarm_to_target: Dict[str, str] = {e.source: e.target for e in belongs}
-        target_to_alarms: Dict[str, Set[str]] = {}
-        for e in belongs:
-            target_to_alarms.setdefault(e.target, set()).add(e.source)
-
-        # Resolve topology: port -> device
-        port_to_device: Dict[str, str] = {}
-        for edge in topo:
-            if edge.source.startswith("port:") and edge.target.startswith("dev:"):
-                port_to_device[edge.source] = edge.target
-            elif edge.source.startswith("dev:") and edge.target.startswith("port:"):
-                port_to_device[edge.target] = edge.source
-
-        link_to_ports: Dict[str, Set[str]] = {}
-        for link in graph.get_nodes(NodeType.LINK):
-            ports_set: Set[str] = set()
-            for endpoint in (link.properties.get("endpoint_a"), link.properties.get("endpoint_b")):
-                if endpoint:
-                    ports_set.add(f"port:{endpoint}")
-            link_to_ports[link.id] = ports_set
+        all_alarm_ids = {n.id for n in graph.get_nodes(NodeType.ALARM)}
 
         if not candidates:
             return self._reject("no candidates provided", "FALLBACK_TO_JUDGE")
 
         top_candidate = candidates[0]
-        explained = self._explained_alarms(
-            top_candidate,
-            alarms,
-            alarm_to_target,
-            target_to_alarms,
-            port_to_device,
-            link_to_ports,
-        )
+        explained = self._explained_alarms(top_candidate, graph)
+
+        # Any alarm explicitly named in the evidence chain is also considered explained
+        evidence_chain = top_candidate.get("evidence_chain", [])
+        chain_text = " ".join(str(line) for line in evidence_chain)
+        for alarm_id in all_alarm_ids:
+            if alarm_id in chain_text:
+                explained.add(alarm_id)
 
         unexplained = all_alarm_ids - explained
         if unexplained:
@@ -152,42 +125,13 @@ class RefactorCriticSkill:
             "next_suggestions": [],
         }
 
-    def _explained_alarms(
-        self,
-        candidate: Dict[str, Any],
-        alarms: Dict[str, EvidenceNode],
-        alarm_to_target: Dict[str, str],
-        target_to_alarms: Dict[str, Set[str]],
-        port_to_device: Dict[str, str],
-        link_to_ports: Dict[str, Set[str]],
-    ) -> Set[str]:
+    def _explained_alarms(self, candidate: Dict[str, Any], graph: EvidenceGraph) -> Set[str]:
         root_cause = candidate.get("root_cause", "")
+        node_type, _ = graph.parse_node_id(root_cause)
         explained: Set[str] = set()
 
-        if root_cause.startswith("dev:"):
-            target = root_cause
-            explained = set(target_to_alarms.get(target, set()))
-        elif root_cause.startswith("port:"):
-            target = root_cause
-            explained = set(target_to_alarms.get(target, set()))
-            device = port_to_device.get(target)
-            if device:
-                explained |= target_to_alarms.get(device, set())
-        elif root_cause.startswith("link:"):
-            link_id = f"link:{root_cause.split(':', 1)[1]}"
-            ports = link_to_ports.get(link_id, set())
-            for port in ports:
-                explained |= target_to_alarms.get(port, set())
-                device = port_to_device.get(port)
-                if device:
-                    explained |= target_to_alarms.get(device, set())
-
-        # Any alarm explicitly named in the evidence chain is also considered explained
-        evidence_chain = candidate.get("evidence_chain", [])
-        chain_text = " ".join(str(line) for line in evidence_chain)
-        for alarm_id in alarms:
-            if alarm_id in chain_text:
-                explained.add(alarm_id)
+        if node_type in {NodeType.DEVICE, NodeType.PORT, NodeType.LINK}:
+            explained = {a.id for a in graph.get_alarms_for_node(root_cause)}
 
         return explained
 
