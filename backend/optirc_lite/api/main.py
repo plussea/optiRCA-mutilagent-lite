@@ -136,15 +136,6 @@ def _degraded_judge_response(reason: str, exc: Exception | None = None) -> Dict[
         "degradation_reason": reason,
         "error": str(exc) if exc else None,
     }
-    return {
-        "status": "degraded",
-        "candidates": [],
-        "confidence": 0.0,
-        "suggestion": "Judge/Ranker 失败或证据不足，请人工复核证据图。",
-        "requires_human_review": True,
-        "degradation_reason": reason,
-        "error": str(exc) if exc else None,
-    }
 
 
 @app.post("/v1/refactor/parse")
