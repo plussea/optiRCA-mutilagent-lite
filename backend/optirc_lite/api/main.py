@@ -3,6 +3,7 @@ import json
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -101,6 +102,29 @@ def _degraded_parse_response(reason: str, exc: Exception | None = None) -> Dict[
     }
 
 
+def _degraded_diagnose_response(
+    reason: str,
+    input_payload: Dict[str, Any],
+    evidence_graph: Dict[str, Any] | None = None,
+    dossier_id: str | None = None,
+    exc: Exception | None = None,
+) -> Dict[str, Any]:
+    return {
+        "status": "degraded",
+        "dossier_id": dossier_id,
+        "root_cause": {},
+        "evidence_chain": [],
+        "confidence": 0.0,
+        "suggestion": "自动推理降级，请人工复核拓扑与告警时间线。",
+        "requires_human_review": True,
+        "degradation_reason": reason,
+        "input": input_payload,
+        "evidence_graph": evidence_graph or {"nodes": [], "edges": []},
+        "critic_verdict": None,
+        "error": str(exc) if exc else None,
+    }
+
+
 class JudgeRankRequest(BaseModel):
     fact_table: Dict[str, Any]
     evidence_graph: Dict[str, Any]
@@ -152,6 +176,7 @@ async def refactor_parse(
         return _degraded_parse_response("invalid_topology", exc)
 
     session_id = str(uuid.uuid4())
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
     target = settings.upload_dir / f"{session_id}_{Path(alarms.filename).name}"
     with target.open("wb") as handle:
         shutil.copyfileobj(alarms.file, handle)
@@ -341,6 +366,157 @@ async def refactor_critic(request: CriticRequest) -> Dict[str, Any]:
         return _degraded_critic_response("agent_failure", exc)
 
     return _degraded_critic_response("max_fallback_exceeded")
+
+
+@app.post("/api/v1/diagnose")
+async def diagnose(
+    alarms: UploadFile = File(...),
+    topology: str = Form(...),
+    max_fallback_rounds: int = Form(2),
+) -> Dict[str, Any]:
+    """End-to-end diagnosis: parse → topology → judge → rank → critic."""
+    dossier_id = f"DOS-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+    if not alarms.filename or not alarms.filename.lower().endswith(".csv"):
+        return _degraded_diagnose_response("invalid_file", {"filename": alarms.filename})
+
+    try:
+        topology_data = json.loads(topology)
+    except json.JSONDecodeError as exc:
+        return _degraded_diagnose_response("invalid_topology", {"topology": topology}, exc=exc)
+
+    session_id = str(uuid.uuid4())
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    target = settings.upload_dir / f"{session_id}_{Path(alarms.filename).name}"
+    with target.open("wb") as handle:
+        shutil.copyfileobj(alarms.file, handle)
+
+    input_payload = {
+        "filename": alarms.filename,
+        "topology": topology_data,
+    }
+
+    state: AgentState = {
+        "session_id": session_id,
+        "raw_input": str(target),
+        "topology": topology_data,
+        "status": "init",
+        "pending_human": False,
+        "human_decision": None,
+        "retry_count": 0,
+        "perception": {},
+        "diagnosis": {},
+        "validation": {},
+        "planning": {},
+        "solution_validation": {},
+        "human_review": {},
+        "closure": {},
+        "runtime_context": {},
+        "observations": [],
+        "tool_calls": [],
+        "decision_trace": [],
+        "error_message": None,
+    }
+
+    try:
+        perception_update = await refactor_runtime.run_phase("perception", state)
+        state.update(perception_update)
+        if "perception" not in state or not state["perception"]:
+            return _degraded_diagnose_response(
+                "perception_failure", input_payload, EvidenceGraph()._read(), dossier_id
+            )
+
+        topology_update = await refactor_runtime.run_phase("topology", state)
+        state.update(topology_update)
+        if "topology" not in state or not state["topology"]:
+            return _degraded_diagnose_response(
+                "topology_failure", input_payload, EvidenceGraph()._read(), dossier_id
+            )
+
+        # Keep the in-memory evidence graph in state for downstream skills.
+        state["evidence_graph"] = EvidenceGraph()._read()
+
+        alarm_count = state["perception"].get("alarm_count", 0)
+        if alarm_count == 0:
+            return _degraded_diagnose_response(
+                "empty_evidence", input_payload, state["evidence_graph"], dossier_id
+            )
+
+        judge_update = await refactor_runtime.run_phase("judge", state)
+        state.update(judge_update)
+        state["evidence_graph"] = EvidenceGraph()._read()
+        if "judge" not in state or not state["judge"] or not state["judge"].get("candidates"):
+            return _degraded_diagnose_response(
+                "judge_failure", input_payload, state["evidence_graph"], dossier_id
+            )
+
+        rank_update = await refactor_runtime.run_phase("rank", state)
+        state.update(rank_update)
+        state["evidence_graph"] = EvidenceGraph()._read()
+        if "rank" not in state or not state["rank"]:
+            return _degraded_diagnose_response(
+                "ranker_failure", input_payload, state["evidence_graph"], dossier_id
+            )
+
+        state["candidates"] = state["rank"]["candidates"]
+
+        for round_idx in range(max_fallback_rounds + 1):
+            critic_update = await refactor_runtime.run_phase("critic", state)
+            state.update(critic_update)
+            state["evidence_graph"] = EvidenceGraph()._read()
+            critic = state.get("critic", {})
+
+            if critic.get("verdict") == "pass":
+                return {
+                    "status": "success",
+                    "dossier_id": dossier_id,
+                    "session_id": session_id,
+                    "root_cause": state["candidates"][0] if state["candidates"] else None,
+                    "evidence_chain": state["candidates"][0].get("evidence_chain", []) if state["candidates"] else [],
+                    "confidence": state["candidates"][0].get("confidence", 0.0) if state["candidates"] else 0.0,
+                    "suggestion": "复核通过，建议按排名最高的候选根因处理。",
+                    "requires_human_review": False,
+                    "input": input_payload,
+                    "evidence_graph": state["evidence_graph"],
+                    "critic_verdict": "pass",
+                }
+
+            if round_idx == max_fallback_rounds:
+                return _degraded_diagnose_response(
+                    "max_fallback_exceeded",
+                    input_payload,
+                    state["evidence_graph"],
+                    dossier_id,
+                )
+
+            action = critic.get("fallback_action")
+            if action == "FALLBACK_TO_JUDGE":
+                judge_update = await refactor_runtime.run_phase("judge", state)
+                state.update(judge_update)
+                state["evidence_graph"] = EvidenceGraph()._read()
+                state["candidates"] = state["judge"].get("candidates", [])
+                rank_update = await refactor_runtime.run_phase("rank", state)
+                state.update(rank_update)
+                state["evidence_graph"] = EvidenceGraph()._read()
+                state["candidates"] = state["rank"].get("candidates", [])
+            elif action == "FALLBACK_TO_RANKER":
+                state["judge"] = {"candidates": state["candidates"]}
+                rank_update = await refactor_runtime.run_phase("rank", state)
+                state.update(rank_update)
+                state["evidence_graph"] = EvidenceGraph()._read()
+                state["candidates"] = state["rank"].get("candidates", [])
+            else:
+                # No actionable fallback; stop early with the reject verdict.
+                return _degraded_diagnose_response(
+                    "agent_failure" if not critic.get("fallback_action") else "critic_reject",
+                    input_payload,
+                    state["evidence_graph"],
+                    dossier_id,
+                )
+    except Exception as exc:
+        return _degraded_diagnose_response("agent_failure", input_payload, EvidenceGraph()._read(), dossier_id, exc)
+
+    return _degraded_diagnose_response("max_fallback_exceeded", input_payload, EvidenceGraph()._read(), dossier_id)
 
 
 @app.post("/v1/sessions")
