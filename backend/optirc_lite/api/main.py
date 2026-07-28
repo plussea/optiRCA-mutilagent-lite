@@ -106,7 +106,36 @@ class JudgeRankRequest(BaseModel):
     evidence_graph: Dict[str, Any]
 
 
+class CriticRequest(BaseModel):
+    candidates: List[Dict[str, Any]]
+    evidence_graph: Dict[str, Any]
+    max_fallback_rounds: int = 0
+
+
+def _degraded_critic_response(reason: str, exc: Exception | None = None) -> Dict[str, Any]:
+    return {
+        "status": "degraded",
+        "verdict": "reject",
+        "reasons": ["Critic/Orchestrator 无法收敛"],
+        "fallback_action": None,
+        "confidence": 0.0,
+        "suggestion": "达到最大回退次数仍未通过复核，请人工复核候选根因。",
+        "requires_human_review": True,
+        "degradation_reason": reason,
+        "error": str(exc) if exc else None,
+    }
+
+
 def _degraded_judge_response(reason: str, exc: Exception | None = None) -> Dict[str, Any]:
+    return {
+        "status": "degraded",
+        "candidates": [],
+        "confidence": 0.0,
+        "suggestion": "Judge/Ranker 失败或证据不足，请人工复核证据图。",
+        "requires_human_review": True,
+        "degradation_reason": reason,
+        "error": str(exc) if exc else None,
+    }
     return {
         "status": "degraded",
         "candidates": [],
@@ -228,7 +257,99 @@ async def refactor_judge_rank(request: JudgeRankRequest) -> Dict[str, Any]:
         "status": "judged",
         "session_id": session_id,
         "candidates": state["rank"]["candidates"],
+        "evidence_graph": request.evidence_graph,
     }
+
+
+@app.post("/v1/refactor/critic")
+async def refactor_critic(request: CriticRequest) -> Dict[str, Any]:
+    session_id = str(uuid.uuid4())
+    graph = EvidenceGraph()
+    graph.init()
+    graph._write(request.evidence_graph)
+
+    alarm_count = len([n for n in request.evidence_graph.get("nodes", []) if n.get("type") == "Alarm"])
+    state: AgentState = {
+        "session_id": session_id,
+        "raw_input": "",
+        "perception": {"alarm_count": alarm_count},
+        "evidence_graph": request.evidence_graph,
+        "candidates": request.candidates,
+        "status": "init",
+        "pending_human": False,
+        "human_decision": None,
+        "retry_count": 0,
+        "diagnosis": {},
+        "validation": {},
+        "planning": {},
+        "solution_validation": {},
+        "human_review": {},
+        "closure": {},
+        "runtime_context": {},
+        "observations": [],
+        "tool_calls": [],
+        "decision_trace": [],
+        "error_message": None,
+    }
+
+    try:
+        for round_idx in range(request.max_fallback_rounds + 1):
+            critic_update = await refactor_runtime.run_phase("critic", state)
+            state.update(critic_update)
+            critic = state.get("critic", {})
+
+            if critic.get("verdict") == "pass":
+                return {
+                    "status": "reviewed",
+                    "session_id": session_id,
+                    "verdict": "pass",
+                    "reasons": critic.get("reasons", []),
+                    "fallback_action": None,
+                    "candidate": state["candidates"][0] if state["candidates"] else None,
+                }
+
+            # Last allowed round: return the reject verdict without further fallback,
+            # unless fallbacks were actually attempted — then degrade.
+            if round_idx == request.max_fallback_rounds:
+                if request.max_fallback_rounds > 0:
+                    return _degraded_critic_response("max_fallback_exceeded")
+                return {
+                    "status": "reviewed",
+                    "session_id": session_id,
+                    "verdict": critic.get("verdict", "reject"),
+                    "reasons": critic.get("reasons", []),
+                    "fallback_action": critic.get("fallback_action"),
+                    "candidate": state["candidates"][0] if state["candidates"] else None,
+                }
+
+            # Perform fallback.
+            action = critic.get("fallback_action")
+            if action == "FALLBACK_TO_JUDGE":
+                judge_update = await refactor_runtime.run_phase("judge", state)
+                state.update(judge_update)
+                state["candidates"] = state["judge"].get("candidates", [])
+                rank_update = await refactor_runtime.run_phase("rank", state)
+                state.update(rank_update)
+                state["candidates"] = state["rank"].get("candidates", [])
+            elif action == "FALLBACK_TO_RANKER":
+                state["judge"] = {"candidates": state["candidates"]}
+                rank_update = await refactor_runtime.run_phase("rank", state)
+                state.update(rank_update)
+                state["candidates"] = state["rank"].get("candidates", [])
+            else:
+                # No actionable fallback; stop early.
+                return {
+                    "status": "reviewed",
+                    "session_id": session_id,
+                    "verdict": critic.get("verdict", "reject"),
+                    "reasons": critic.get("reasons", []),
+                    "fallback_action": action,
+                    "candidate": state["candidates"][0] if state["candidates"] else None,
+                }
+    except Exception as exc:
+        return _degraded_critic_response("agent_failure", exc)
+
+    return _degraded_critic_response("max_fallback_exceeded")
 
 
 @app.post("/v1/sessions")

@@ -1,8 +1,17 @@
+from typing import Any, Dict, List, Set
+
 from optirc_lite.skills.base import SkillOutput
 from optirc_lite.skills.schemas import (
+    CriticSkillOutput,
     DefaultSkillInput,
     SolutionValidationSkillOutput,
     ValidationSkillOutput,
+)
+from optirc_lite.storage.evidence_graph import (
+    EdgeType,
+    EvidenceGraph,
+    EvidenceNode,
+    NodeType,
 )
 from optirc_lite.tools.registry import ToolRegistry
 from optirc_lite.workflow.state import AgentState
@@ -67,4 +76,130 @@ class SolutionCriticSkill:
             "evidence": [f"步骤数: {len(steps)}", f"资源数: {len(resources)}"],
             "observations": [{"type": "solution_critic", "valid": valid, "risk": risk_level}],
             "next_suggestions": ["human_review"],
+        }
+
+
+class RefactorCriticSkill:
+    name = "critic.diagnosis_critic"
+    description = "Review top-K root-cause candidates and reject those that leave unexplained alarms."
+    required_tools: list[str] = []
+    input_schema = DefaultSkillInput
+    output_schema = CriticSkillOutput
+
+    async def can_handle(self, state: AgentState) -> float:
+        return 1.0 if state.get("candidates") and state.get("evidence_graph") else 0.0
+
+    async def run(self, state: AgentState, tools: ToolRegistry) -> SkillOutput:
+        candidates: List[Dict[str, Any]] = state.get("candidates", [])
+        graph = EvidenceGraph()
+
+        alarms = {n.id: n for n in graph.get_nodes(NodeType.ALARM)}
+        all_alarm_ids = set(alarms.keys())
+        belongs = graph.get_edges(EdgeType.BELONGS_TO)
+        topo = graph.get_edges(EdgeType.TOPOLOGY)
+
+        # Build alarm -> target and target -> alarm(s) indexes
+        alarm_to_target: Dict[str, str] = {e.source: e.target for e in belongs}
+        target_to_alarms: Dict[str, Set[str]] = {}
+        for e in belongs:
+            target_to_alarms.setdefault(e.target, set()).add(e.source)
+
+        # Resolve topology: port -> device
+        port_to_device: Dict[str, str] = {}
+        for edge in topo:
+            if edge.source.startswith("port:") and edge.target.startswith("dev:"):
+                port_to_device[edge.source] = edge.target
+            elif edge.source.startswith("dev:") and edge.target.startswith("port:"):
+                port_to_device[edge.target] = edge.source
+
+        link_to_ports: Dict[str, Set[str]] = {}
+        for link in graph.get_nodes(NodeType.LINK):
+            ports_set: Set[str] = set()
+            for endpoint in (link.properties.get("endpoint_a"), link.properties.get("endpoint_b")):
+                if endpoint:
+                    ports_set.add(f"port:{endpoint}")
+            link_to_ports[link.id] = ports_set
+
+        if not candidates:
+            return self._reject("no candidates provided", "FALLBACK_TO_JUDGE")
+
+        top_candidate = candidates[0]
+        explained = self._explained_alarms(
+            top_candidate,
+            alarms,
+            alarm_to_target,
+            target_to_alarms,
+            port_to_device,
+            link_to_ports,
+        )
+
+        unexplained = all_alarm_ids - explained
+        if unexplained:
+            return self._reject(
+                f"top candidate leaves {len(unexplained)} alarm(s) unexplained",
+                "FALLBACK_TO_JUDGE",
+            )
+
+        return {
+            "result": {
+                "verdict": "pass",
+                "reasons": ["top candidate explains all observed alarms"],
+                "fallback_action": None,
+            },
+            "confidence": top_candidate.get("confidence", 0.0),
+            "evidence": ["Critic passed: all alarms explained by top candidate"],
+            "observations": [{"type": "critic_pass", "value": {"candidate": top_candidate["root_cause"]}}],
+            "next_suggestions": [],
+        }
+
+    def _explained_alarms(
+        self,
+        candidate: Dict[str, Any],
+        alarms: Dict[str, EvidenceNode],
+        alarm_to_target: Dict[str, str],
+        target_to_alarms: Dict[str, Set[str]],
+        port_to_device: Dict[str, str],
+        link_to_ports: Dict[str, Set[str]],
+    ) -> Set[str]:
+        root_cause = candidate.get("root_cause", "")
+        explained: Set[str] = set()
+
+        if root_cause.startswith("dev:"):
+            target = root_cause
+            explained = set(target_to_alarms.get(target, set()))
+        elif root_cause.startswith("port:"):
+            target = root_cause
+            explained = set(target_to_alarms.get(target, set()))
+            device = port_to_device.get(target)
+            if device:
+                explained |= target_to_alarms.get(device, set())
+        elif root_cause.startswith("link:"):
+            link_id = f"link:{root_cause.split(':', 1)[1]}"
+            ports = link_to_ports.get(link_id, set())
+            for port in ports:
+                explained |= target_to_alarms.get(port, set())
+                device = port_to_device.get(port)
+                if device:
+                    explained |= target_to_alarms.get(device, set())
+
+        # Any alarm explicitly named in the evidence chain is also considered explained
+        evidence_chain = candidate.get("evidence_chain", [])
+        chain_text = " ".join(str(line) for line in evidence_chain)
+        for alarm_id in alarms:
+            if alarm_id in chain_text:
+                explained.add(alarm_id)
+
+        return explained
+
+    def _reject(self, reason: str, action: str) -> SkillOutput:
+        return {
+            "result": {
+                "verdict": "reject",
+                "reasons": [reason],
+                "fallback_action": action,
+            },
+            "confidence": 0.0,
+            "evidence": [f"Critic rejected: {reason}"],
+            "observations": [{"type": "critic_reject", "value": {"reason": reason, "fallback_action": action}}],
+            "next_suggestions": [action.lower().replace("fallback_to_", "")],
         }

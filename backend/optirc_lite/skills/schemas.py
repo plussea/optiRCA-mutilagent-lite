@@ -45,6 +45,16 @@ class RankSkillOutput(SkillOutput):
     result: RankResult = Field(default_factory=RankResult)
 
 
+class CriticResult(BaseModel):
+    verdict: str = "reject"
+    reasons: List[str] = Field(default_factory=list)
+    fallback_action: str | None = None
+
+
+class CriticSkillOutput(SkillOutput):
+    result: CriticResult = Field(default_factory=CriticResult)
+
+
 class DiagnosisResult(BaseModel):
     root_cause: str = "unknown"
     confidence: float = 0.0

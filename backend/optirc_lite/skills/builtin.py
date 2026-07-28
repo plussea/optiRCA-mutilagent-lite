@@ -1,5 +1,9 @@
 from optirc_lite.skills.closure import KnowledgeClosureSkill
-from optirc_lite.skills.critic import DiagnosisCriticSkill, SolutionCriticSkill
+from optirc_lite.skills.critic import (
+    DiagnosisCriticSkill,
+    RefactorCriticSkill,
+    SolutionCriticSkill,
+)
 from optirc_lite.skills.diagnosis import RootCauseDiagnosisSkill
 from optirc_lite.skills.judge import PropagationJudgeSkill
 from optirc_lite.skills.perception import AlarmPerceptionSkill
@@ -15,6 +19,7 @@ def create_builtin_skills() -> SkillRegistry:
     registry.register(TopologyBuilderSkill())
     registry.register(PropagationJudgeSkill())
     registry.register(RootCauseRankerSkill())
+    registry.register(RefactorCriticSkill())
     registry.register(RootCauseDiagnosisSkill())
     registry.register(DiagnosisCriticSkill())
     registry.register(RepairPlanningSkill())
