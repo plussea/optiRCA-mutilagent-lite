@@ -38,6 +38,88 @@ class SQLiteStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dossiers (
+                    dossier_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    input_json TEXT NOT NULL,
+                    evidence_graph_json TEXT NOT NULL,
+                    top_candidate_json TEXT,
+                    critic_verdict TEXT,
+                    degradation_reason TEXT,
+                    confidence REAL NOT NULL,
+                    requires_human_review INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def upsert_dossier(
+        self,
+        dossier_id: str,
+        session_id: str,
+        status: str,
+        input_payload: Dict[str, Any],
+        evidence_graph: Dict[str, Any],
+        top_candidate: Dict[str, Any] | None,
+        critic_verdict: str | None,
+        degradation_reason: str | None,
+        confidence: float,
+        requires_human_review: bool,
+    ) -> None:
+        self.init()
+        now = datetime.now(timezone.utc).isoformat()
+        payload = json.dumps(input_payload, ensure_ascii=False)
+        graph_json = json.dumps(evidence_graph, ensure_ascii=False)
+        candidate_json = json.dumps(top_candidate, ensure_ascii=False) if top_candidate else None
+        with sqlite3.connect(self.path) as conn:
+            conn.execute(
+                """
+                INSERT INTO dossiers(
+                    dossier_id, session_id, status, input_json, evidence_graph_json,
+                    top_candidate_json, critic_verdict, degradation_reason,
+                    confidence, requires_human_review, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dossier_id) DO UPDATE SET
+                    status = excluded.status,
+                    evidence_graph_json = excluded.evidence_graph_json,
+                    top_candidate_json = excluded.top_candidate_json,
+                    critic_verdict = excluded.critic_verdict,
+                    degradation_reason = excluded.degradation_reason,
+                    confidence = excluded.confidence,
+                    requires_human_review = excluded.requires_human_review,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    dossier_id,
+                    session_id,
+                    status,
+                    payload,
+                    graph_json,
+                    candidate_json,
+                    critic_verdict,
+                    degradation_reason,
+                    confidence,
+                    1 if requires_human_review else 0,
+                    now,
+                    now,
+                ),
+            )
+
+    def get_dossier(self, dossier_id: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT * FROM dossiers WHERE dossier_id = ?",
+                (dossier_id,),
+            ).fetchone()
+            columns = [desc[0] for desc in conn.execute("SELECT * FROM dossiers LIMIT 0").description]
+        if row is None:
+            return None
+        return {col: json.loads(val) if col.endswith("_json") and val is not None else val for col, val in zip(columns, row)}
 
     def upsert_session(self, session_id: str, status: str, state: Dict[str, Any]) -> None:
         now = datetime.now(timezone.utc).isoformat()

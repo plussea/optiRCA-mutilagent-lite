@@ -61,11 +61,10 @@ class RootCauseRankerSkill:
     ) -> List[float]:
         root_cause = candidate.get("root_cause", "")
         evidence_chain = candidate.get("evidence_chain", [])
-        chain_alarm_types = [line.split(" @ ")[0].lower() for line in evidence_chain if " @ " in line]
 
         # upstream: candidate explains alarms on both endpoints / downstream
-        covered = sum(1 for alarm_id in alarms if any(a.properties.get("alarm_type", "").lower() in chain_alarm_types for a in [alarms[alarm_id]]) or alarm_id in str(evidence_chain))
-        upstream = round(min(covered / max(total_alarms, 1), 1.0), 3)
+        covered_alarms = {a.id for a in graph.get_alarms_for_node(root_cause)}
+        upstream = round(min(len(covered_alarms) / max(total_alarms, 1), 1.0), 3)
 
         # time_lead: earliest alarm timestamp compared to candidate (simplified)
         time_lead = 0.5
@@ -84,9 +83,9 @@ class RootCauseRankerSkill:
         # priority: severity of covered alarms
         severity_scores = {"critical": 1.0, "major": 0.75, "minor": 0.5, "warning": 0.25}
         severities = [
-            a.properties.get("severity", "").lower()
-            for a in alarms.values()
-            if a.id in str(evidence_chain) or a.properties.get("alarm_type", "").lower() in chain_alarm_types
+            alarms[alarm_id].properties.get("severity", "").lower()
+            for alarm_id in covered_alarms
+            if alarm_id in alarms
         ]
         priority = round(
             sum(severity_scores.get(s, 0.3) for s in severities) / max(len(severities), 1), 3

@@ -44,7 +44,7 @@ class TopologyBuilderSkill:
                 "alarm_count": fact_table.get("alarm_count", 0),
                 "alarms": fact_table.get("alarms", []),
                 "headers": fact_table.get("headers", []),
-                "first_row": fact_table.get("alarms", [{}])[0],
+                "first_row": fact_table.get("first_row") or (fact_table.get("alarms", [{}])[0] if fact_table.get("alarms") else {}),
                 "alarm_types": fact_table.get("alarm_types", []),
                 "devices": list(device_nodes.keys()),
                 "primary_alarm": fact_table.get("primary_alarm", "unknown"),
