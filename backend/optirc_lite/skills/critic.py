@@ -79,7 +79,7 @@ class SolutionCriticSkill:
 
 class RefactorCriticSkill:
     name = "critic.diagnosis_critic"
-    description = "Review top-K root-cause candidates and reject those that leave unexplained alarms."
+    description = "Review top-K root-cause candidates with three counterfactual challenges."
     required_tools: list[str] = []
     input_schema = DefaultSkillInput
     output_schema = CriticSkillOutput
@@ -97,6 +97,9 @@ class RefactorCriticSkill:
             return self._reject("no candidates provided", "FALLBACK_TO_JUDGE")
 
         top_candidate = candidates[0]
+        root_cause = top_candidate.get("root_cause", "")
+        node_type, _ = graph.parse_node_id(root_cause)
+
         explained = self._explained_alarms(top_candidate, graph)
 
         # Any alarm explicitly named in the evidence chain is also considered explained
@@ -107,11 +110,59 @@ class RefactorCriticSkill:
                 explained.add(alarm_id)
 
         unexplained = all_alarm_ids - explained
+        multi_cluster_reason = None
+        if len(clusters := graph.alarm_clusters()) > 1:
+            uncovered = [c for c in clusters if not (c <= explained)]
+            if uncovered:
+                multi_cluster_reason = (
+                    f"detected {len(uncovered)} additional alarm cluster(s) "
+                    "unexplained by top candidate"
+                )
+
         if unexplained:
+            # Prefer the more specific multi-cluster reason when it covers all unexplained alarms.
+            if multi_cluster_reason and unexplained <= set().union(*uncovered):
+                return self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
             return self._reject(
                 f"top candidate leaves {len(unexplained)} alarm(s) unexplained",
                 "FALLBACK_TO_JUDGE",
             )
+
+        if multi_cluster_reason:
+            return self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
+
+        # Challenge #2: for Link candidates, both endpoints must have consistent LOS-type alarms.
+        if node_type == NodeType.LINK:
+            alarms_a, alarms_b = graph.get_link_endpoint_alarms(root_cause)
+            los_types = {"los", "mut_los"}
+            a_has_los = any(
+                graph.get_node(a).properties.get("alarm_type", "").lower() in los_types
+                for a in alarms_a
+                if graph.get_node(a)
+            )
+            b_has_los = any(
+                graph.get_node(b).properties.get("alarm_type", "").lower() in los_types
+                for b in alarms_b
+                if graph.get_node(b)
+            )
+            if alarms_a and alarms_b and not (a_has_los and b_has_los):
+                return self._reject(
+                    "link candidate lacks bidirectional LOS consistency",
+                    "FALLBACK_TO_RANKER",
+                )
+
+        # Challenge #3: detect disjoint alarm clusters that suggest a missed multi-root cause.
+        clusters = graph.alarm_clusters()
+        if len(clusters) > 1:
+            explained_set = explained
+            uncovered_clusters = [
+                cluster for cluster in clusters if not (cluster <= explained_set)
+            ]
+            if uncovered_clusters:
+                return self._reject(
+                    f"detected {len(uncovered_clusters)} additional alarm cluster(s) not explained by top candidate",
+                    "FALLBACK_TO_JUDGE",
+                )
 
         return {
             "result": {

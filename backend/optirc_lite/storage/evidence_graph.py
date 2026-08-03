@@ -324,6 +324,88 @@ class EvidenceGraph:
             edges=matched,
         )
 
+    def get_link_endpoint_alarms(self, link_id: str) -> Tuple[Set[str], Set[str]]:
+        """Return alarm IDs on each endpoint of a link.
+
+        Returns (endpoint_a_alarms, endpoint_b_alarms).
+        """
+        link = self.get_node(link_id)
+        if link is None or link.type != NodeType.LINK:
+            return set(), set()
+
+        endpoint_a = link.properties.get("endpoint_a")
+        endpoint_b = link.properties.get("endpoint_b")
+
+        alarms_a: Set[str] = set()
+        alarms_b: Set[str] = set()
+
+        if endpoint_a:
+            alarms_a = {a.id for a in self.get_alarms_for_node(f"port:{endpoint_a}")}
+        if endpoint_b:
+            alarms_b = {a.id for a in self.get_alarms_for_node(f"port:{endpoint_b}")}
+
+        return alarms_a, alarms_b
+
+    def alarm_clusters(self) -> List[Set[str]]:
+        """Group alarms into connected clusters based on topology proximity.
+
+        Two alarms are in the same cluster when their attachment points (the
+        device/port they BELONG_TO) are the same or connected by TOPOLOGY edges.
+        Multi-cluster results suggest a possible multi-root-cause scenario.
+        """
+        data = self._read()
+        edges = [EvidenceEdge.from_dict({**e}) for e in data.get("edges", [])]
+
+        belongs = {e.source: e.target for e in edges if e.type == EdgeType.BELONGS_TO}
+        topo = [e for e in edges if e.type == EdgeType.TOPOLOGY]
+
+        # Build topology adjacency between attachment points.
+        topo_adj: Dict[str, Set[str]] = {}
+        for edge in topo:
+            topo_adj.setdefault(edge.source, set()).add(edge.target)
+            topo_adj.setdefault(edge.target, set()).add(edge.source)
+
+        # Union-find over anchors that actually carry alarms.
+        anchors: Set[str] = set(belongs.values())
+        parent = {anchor: anchor for anchor in anchors}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(x: str, y: str) -> None:
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+
+        for anchor in list(anchors):
+            for neighbor in topo_adj.get(anchor, set()):
+                if neighbor in anchors:
+                    union(anchor, neighbor)
+
+        clusters: Dict[str, Set[str]] = {}
+        for alarm_id, anchor in belongs.items():
+            root = find(anchor)
+            clusters.setdefault(root, set()).add(alarm_id)
+
+        return list(clusters.values())
+
+    def get_alarm_clusters_for_node(self, node_id: str) -> Set[str]:
+        """Return the alarm cluster ids (anchor root ids) a candidate node covers.
+
+        A node covers a cluster if it can explain at least one alarm in that
+        cluster through topology proximity.
+        """
+        clusters = self.alarm_clusters()
+        covered_alarms = {a.id for a in self.get_alarms_for_node(node_id)}
+        covered_clusters: Set[str] = set()
+        for cluster in clusters:
+            if cluster & covered_alarms:
+                covered_clusters.add(id(cluster))
+        return covered_clusters
+
     def build_propagates_edges(self) -> None:
         """Create PROPAGATES edges from Port/Link nodes to their reachable Alarms."""
         data = self._read()
