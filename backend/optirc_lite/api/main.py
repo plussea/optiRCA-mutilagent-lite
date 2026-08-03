@@ -5,7 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from optirc_lite.config import settings
 from optirc_lite.runtime.agent_runtime import AgentRuntime
+from optirc_lite.skills.archivist import archivist
 from optirc_lite.skills.builtin import create_builtin_skills
 from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph
 from optirc_lite.storage.graph_store import graph_store
@@ -388,20 +389,53 @@ async def _run_diagnose_workflow(
     try:
         final_state = await asyncio.wait_for(wf.ainvoke(state), timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        return _degraded_diagnose_response(
+        response = _degraded_diagnose_response(
             "critic_timeout", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id")
         )
+        _archive_from_response(dossier_id, state, response)
+        return response
     except Exception as exc:
-        return _degraded_diagnose_response(
+        response = _degraded_diagnose_response(
             "agent_failure", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id"), exc
         )
+        _archive_from_response(dossier_id, state, response)
+        return response
 
     response = final_state.get("response")
     if response:
+        _archive_from_response(dossier_id, final_state, response)
         return response
 
-    return _degraded_diagnose_response(
+    response = _degraded_diagnose_response(
         "agent_failure", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id")
+    )
+    _archive_from_response(dossier_id, state, response)
+    return response
+
+
+def _archive_from_response(
+    dossier_id: str,
+    state: AgentState,
+    response: Dict[str, Any],
+    human_decision: Optional[str] = None,
+    human_notes: Optional[str] = None,
+) -> None:
+    """Archive a dossier from a final API response and workflow state."""
+    candidates = state.get("candidates", [])
+    top = response.get("root_cause") or (candidates[0] if candidates else None)
+    archivist.archive(
+        dossier_id=dossier_id,
+        session_id=state.get("session_id", "unknown"),
+        input_payload=state.get("input", {}),
+        evidence_graph=state.get("evidence_graph", {"nodes": [], "edges": []}),
+        candidates=candidates,
+        top_candidate=top,
+        critic_verdict=response.get("critic_verdict"),
+        degradation_reason=response.get("degradation_reason"),
+        confidence=response.get("confidence", 0.0),
+        requires_human_review=response.get("requires_human_review", True),
+        human_decision=human_decision,
+        human_notes=human_notes,
     )
 
 
@@ -547,12 +581,21 @@ async def submit_human_decision(
         store.add_event(session_id, "escalated", {"notes": notes})
 
     store.upsert_session(session_id, state["status"], state)
+
+    # Archive human-closed cases as structured dossiers.
+    dossier_id = state.get("dossier_id") or f"DOS-HUMAN-{session_id}"
+    if state.get("response"):
+        _archive_from_response(dossier_id, state, state["response"], decision, notes)
+
     return {"session_id": session_id, "status": state["status"]}
 
 
-@app.get("/health")
-async def health() -> Dict[str, Any]:
-    return {"status": "ok", "version": "0.1.0"}
+@app.get("/v1/dossier/{dossier_id}")
+async def get_dossier(dossier_id: str) -> Dict[str, Any]:
+    dossier = store.get_session(dossier_id)
+    if dossier is None:
+        raise HTTPException(status_code=404, detail="dossier not found")
+    return dossier
 
 
 if __name__ == "__main__":
