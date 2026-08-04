@@ -15,6 +15,7 @@ from optirc_lite.config import settings
 from optirc_lite.runtime.agent_runtime import AgentRuntime
 from optirc_lite.skills.archivist import archivist
 from optirc_lite.skills.builtin import create_builtin_skills
+from optirc_lite.skills.evaluator import evaluator
 from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph
 from optirc_lite.storage.graph_store import graph_store
 from optirc_lite.storage.sqlite_store import store
@@ -596,6 +597,30 @@ async def get_dossier(dossier_id: str) -> Dict[str, Any]:
     if dossier is None:
         raise HTTPException(status_code=404, detail="dossier not found")
     return dossier
+
+
+class EvaluateRequest(BaseModel):
+    dossier_ids: List[str]
+
+
+@app.post("/v1/evaluate")
+async def create_evaluation(request: EvaluateRequest) -> Dict[str, Any]:
+    if not request.dossier_ids:
+        raise HTTPException(status_code=400, detail="dossier_ids cannot be empty")
+    report = evaluator.evaluate(request.dossier_ids)
+    return {
+        "evaluation_id": report["evaluation_id"],
+        "status": report["status"],
+        "report_url": f"/v1/evaluate/{report['evaluation_id']}",
+    }
+
+
+@app.get("/v1/evaluate/{evaluation_id}")
+async def get_evaluation(evaluation_id: str) -> Dict[str, Any]:
+    report = store.get_session(evaluation_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="evaluation not found")
+    return report
 
 
 if __name__ == "__main__":
