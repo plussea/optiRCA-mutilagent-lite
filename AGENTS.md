@@ -11,3 +11,10 @@ Uses the five default triage labels (`needs-triage`, `needs-info`, `ready-for-ag
 ### Domain docs
 
 Single-context layout: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+
+### Project-specific notes
+
+- The active refactor is tracked in `.tmp_issue9.md` through `.tmp_issue13.md`.
+- Main API seams: `POST /api/v1/diagnose`, `GET /v1/dossier/{id}`, `POST /v1/evaluate`, `POST /v1/gepa`.
+- Tests live in `backend/tests/` and should remain green; run `python -m pytest tests/ -q` from `backend/`.
+- CodeGraph is enabled; prefer `codegraph_*` tools for structural queries.

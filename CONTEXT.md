@@ -1,4 +1,4 @@
-# Context: optiRCA-mutilagent-lite
+# Context: optiRCA Lite
 
 ## Domain overview
 
@@ -45,6 +45,23 @@
 3. **Critic 输出必须包含复核结论与排除理由；Orchestrator 最多允许 2 轮回退。**
 4. **GEPA 染色体编码为 `<Prompts, Weights, Cases>`；默认种群大小 5，最大代数 10，精英比例 40%。**
 5. **`:PROPAGATES` 边起点为 `:Port`/`:Link`，告警不直接从 `:Device` 传播。**
+6. **诊断案卷采用五层结构：input_layer、intermediate_layer、output_layer、feedback_layer、metadata。**
+7. **所有诊断结果（成功或降级）均归档为案卷，人工审核闭环更新 feedback_layer。**
+
+## API seams
+
+| 端点 | 用途 |
+|---|---|
+| `POST /api/v1/diagnose` | 端到端诊断主入口 |
+| `GET /v1/dossier/{dossier_id}` | 获取完整诊断案卷 |
+| `POST /v1/evaluate` | 离线回归评测 |
+| `GET /v1/evaluate/{evaluation_id}` | 获取评测报告 |
+| `POST /v1/gepa` | 策略优化提案 |
+| `GET /v1/gepa/{optimization_id}` | 获取 GEPA 报告 |
+| `POST /v1/refactor/parse` | 感知层 seam |
+| `POST /v1/refactor/judge-rank` | Judge + Ranker seam |
+| `POST /v1/refactor/critic` | Critic seam |
+| `POST /v1/sessions/{id}/human-decision` | 人工审核闭环 |
 
 ## Ubiquitous language
 
@@ -57,13 +74,38 @@
 | Diagnosis Dossier | 诊断案卷，包含 input/intermediate/output/feedback/metadata 五层结构 |
 | 弱拓扑推断 | 对缺失链路基于同设备端口对等规则补全，并标注置信度（如 0.6） |
 | 规则基线 | 超时或 Agent 失败时的降级输出，通常直接上报最高 Severity 告警 |
+| 染色体 | GEPA 策略编码 `<Prompts, Weights, Cases>` |
 
 ## ADR index
 
-暂无。后续架构决策按 `docs/adr/NNNN-title.md` 格式沉淀。
+- ADR-0001：共享黑板（异构证据图）作为 Agent 间唯一通信方式
+- ADR-0002：Propagation Judge 与 Root Cause Ranker 作为一级 Agent，内部拆分子模块
+- ADR-0003：Critic 质量门控与回退终止策略
+- ADR-0004：GEPA 染色体编码与超参数
+- ADR-0005：`:PROPAGATES` 边起点为 `:Port` 或 `:Link`
+- ADR-0006：Ranker → Critic 流水线中的轻量复核边界
+- ADR-0007：诊断降级输出形态
+- ADR-0008：GEPA 染色体中的案例视图与案例库版本管理
+
+## Current status (2026-08-04)
+
+重构主线 #9-#13 已完成：
+- #9：LangGraph 统一编排 workflow (`perception → topology → judge → rank → critic → assemble`)
+- #10：Critic 三挑战清单（unexplained alarms、bidirectional LOS、multi-cluster）
+- #11：Case Archivist 五层案卷 + 向量模板索引
+- #12：Evaluator 离线回归指标 + 错误归因
+- #13：GEPA Strategy Optimizer Pareto 前沿与推荐策略
+
+剩余方向：
+- Judge/Ranker 内部子模块拆分（Generator/Validator、Feature Scorer/Aggregator）。
+- Topology Builder 弱拓扑推断与边置信度。
+- Judge/Critic 引入 LLM 增强推理并保留规则回退。
+- 故障注入仿真与灰度发布机制。
 
 ## References
 
 - `project_prd_refactor.md` — 产品需求与模块详细设计
+- `spec_prd_refactor.md` — 重构 Spec 与测试 seams
+- `spec_gepa_optimizer.md` — GEPA/Evaluator/Archivist 详细 Spec
 - `docs/agents/domain.md` — Agent 如何消费领域文档
 - `docs/agents/issue-tracker.md` — 问题追踪流程

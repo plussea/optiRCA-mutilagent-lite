@@ -21,6 +21,19 @@ LangGraph Workflow
   -> SQLite / LanceDB / JSON graph / OpenAI-compatible LLM
 ```
 
+当前主链路基于 PRD 重构：
+
+```text
+POST /api/v1/diagnose
+  -> Alarm Parser + Topology Builder（感知层）
+  -> Propagation Judge（判断层）
+  -> Root Cause Ranker（排序层）
+  -> Critic Reviewer（复核层）
+  -> Case Archivist / Evaluator / GEPA（归档与自迭代层）
+```
+
+所有 Agent 通过异构证据图共享状态，不直接调用；最终输出诊断案卷（Diagnosis Dossier）。
+
 ## 快速启动
 
 后端：
@@ -67,15 +80,34 @@ LLM_MODEL=your-model-name
 
 ## 当前能力
 
-- CSV 告警解析与关键字段归一化。
-- LanceDB 本地向量检索，默认内置光网络知识和 SOP 种子数据。
-- JSON 拓扑图邻居查询。
+- CSV 告警解析与关键字段归一化（Alarm Parser）。
+- JSON 拓扑解析与异构证据图构建（Topology Builder）。
+- 候选传播链生成（Propagation Judge）。
+- 六维特征打分与 Top-K 排序（Root Cause Ranker）。
+- 三挑战反事实复核与回退控制（Critic Reviewer）。
+- 降级输出（ADR-0007）与规则基线回退。
+- 五层结构诊断案卷归档（Case Archivist）。
+- 离线回归指标与错误归因（Evaluator）。
+- 遗传-帕累托策略优化器（GEPA）。
 - OpenAI-compatible LLM Tool，失败时自动回退到启发式诊断/规划。
-- 根因诊断 Skill。
-- 诊断 Critic 与方案 Critic。
-- 修复方案生成 Skill。
-- 人工审核与批准后知识闭环。
 - Runtime Trace 前端展示。
+
+## API 速查
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/v1/diagnose` | POST | 端到端诊断：CSV + 拓扑 JSON |
+| `/v1/dossier/{dossier_id}` | GET | 获取诊断案卷 |
+| `/v1/evaluate` | POST | 对一批案卷运行离线回归 |
+| `/v1/evaluate/{evaluation_id}` | GET | 获取评测报告 |
+| `/v1/gepa` | POST | 从评测报告生成策略提案 |
+| `/v1/gepa/{optimization_id}` | GET | 获取 GEPA 优化报告 |
+| `/v1/refactor/parse` | POST | 感知层 seam |
+| `/v1/refactor/judge-rank` | POST | Judge + Ranker seam |
+| `/v1/refactor/critic` | POST | Critic seam |
+| `/v1/sessions` | POST | 旧版会话入口（向后兼容） |
+| `/v1/sessions/{id}` | GET | 获取会话状态 |
+| `/v1/sessions/{id}/human-decision` | POST | 人工审核闭环 |
 
 ## 目录
 
@@ -93,9 +125,19 @@ examples/
   demo_alarm.csv
 ```
 
+## 关键文档
+
+- `CONTEXT.md` — 领域模型、Agent 分类、术语表、质量目标
+- `project_prd_refactor.md` — 产品需求与模块详细设计
+- `spec_prd_refactor.md` — 重构 Spec 与测试 seams
+- `spec_gepa_optimizer.md` — GEPA/Evaluator/Archivist 详细 Spec
+- `docs/adr/` — 架构决策记录（ADR-0001 至 ADR-0008）
+
 ## 后续建议
 
 - 用真实 embedding 模型替换当前轻量 hash embedding。
-- 给 Tool 也增加输入输出 schema。
-- 把人工审核升级为 LangGraph 原生 interrupt + SQLite checkpointer。
+- 把 Topology Builder 升级为弱拓扑推断 + 边置信度。
+- 拆分 Judge/Ranker 内部子模块（Generator/Validator、Feature Scorer/Aggregator）。
+- 在 Judge 和 Critic 中引入 LLM 增强推理，保留规则回退。
+- 增加故障注入仿真与灰度发布机制。
 - 增加 E2E 测试：上传 CSV -> 等待审核 -> 批准 -> 闭环。
