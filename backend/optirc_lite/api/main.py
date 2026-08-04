@@ -16,6 +16,7 @@ from optirc_lite.runtime.agent_runtime import AgentRuntime
 from optirc_lite.skills.archivist import archivist
 from optirc_lite.skills.builtin import create_builtin_skills
 from optirc_lite.skills.evaluator import evaluator
+from optirc_lite.skills.gepa import gepa
 from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph
 from optirc_lite.storage.graph_store import graph_store
 from optirc_lite.storage.sqlite_store import store
@@ -601,6 +602,40 @@ async def get_dossier(dossier_id: str) -> Dict[str, Any]:
 
 class EvaluateRequest(BaseModel):
     dossier_ids: List[str]
+
+
+class GEPARequest(BaseModel):
+    evaluation_id: str
+    population_size: int = 5
+    max_generations: int = 10
+    elite_ratio: float = 0.4
+
+
+@app.post("/v1/gepa")
+async def create_gepa_optimization(request: GEPARequest) -> Dict[str, Any]:
+    report = store.get_session(request.evaluation_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="evaluation not found")
+
+    optimization_id = gepa.optimize(
+        request.evaluation_id,
+        population_size=request.population_size,
+        max_generations=request.max_generations,
+        elite_ratio=request.elite_ratio,
+    )
+    return {
+        "optimization_id": optimization_id,
+        "status": "completed",
+        "report_url": f"/v1/gepa/{optimization_id}",
+    }
+
+
+@app.get("/v1/gepa/{optimization_id}")
+async def get_gepa_optimization(optimization_id: str) -> Dict[str, Any]:
+    report = store.get_session(optimization_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="optimization not found")
+    return report
 
 
 @app.post("/v1/evaluate")
