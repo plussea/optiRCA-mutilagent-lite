@@ -1,6 +1,6 @@
 """Topology Builder skill — constructs the heterogeneous evidence graph."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from optirc_lite.skills.base import SkillOutput
 from optirc_lite.skills.schemas import DefaultSkillInput, PerceptionSkillOutput
@@ -35,8 +35,10 @@ class TopologyBuilderSkill:
         device_nodes = self._build_devices(topology, graph)
         port_nodes = self._build_ports(topology, graph, device_nodes)
         self._build_links(topology, graph, port_nodes)
+        self._infer_missing_links(topology, graph, port_nodes)
         self._build_alarms(fact_table, graph)
         graph.build_propagates_edges()
+        self._mark_isolated_nodes(graph)
 
         return {
             "result": {
@@ -105,6 +107,7 @@ class TopologyBuilderSkill:
                         target=node_id,
                         type=EdgeType.TOPOLOGY,
                         confidence=1.0,
+                        inferred=False,
                     )
                 )
             mapping[port_id] = node_id
@@ -130,6 +133,8 @@ class TopologyBuilderSkill:
                     endpoint_b=endpoint_b,
                     length_km=link.get("length_km"),
                     loss_db=link.get("loss_db"),
+                    confidence=1.0,
+                    inferred=False,
                 )
             )
             if endpoint_a in port_nodes:
@@ -139,6 +144,7 @@ class TopologyBuilderSkill:
                         target=node_id,
                         type=EdgeType.TOPOLOGY,
                         confidence=1.0,
+                        inferred=False,
                         distance_km=link.get("length_km"),
                     )
                 )
@@ -149,9 +155,100 @@ class TopologyBuilderSkill:
                         target=node_id,
                         type=EdgeType.TOPOLOGY,
                         confidence=1.0,
+                        inferred=False,
                         distance_km=link.get("length_km"),
                     )
                 )
+
+    def _infer_missing_links(
+        self,
+        topology: Dict[str, Any],
+        graph: EvidenceGraph,
+        port_nodes: Dict[str, str],
+    ) -> None:
+        """Infer internal links from unconnected out/in port pairs on the same device.
+
+        Inferred links and their TOPOLOGY edges are marked with ``confidence=0.6`` and
+        ``inferred=true`` to distinguish them from authoritative CMDB topology.
+        """
+        explicit_ports: Set[str] = set()
+        for link in topology.get("links", []):
+            if link.get("endpoint_a"):
+                explicit_ports.add(link["endpoint_a"])
+            if link.get("endpoint_b"):
+                explicit_ports.add(link["endpoint_b"])
+
+        ports_by_device: Dict[str, List[Dict[str, Any]]] = {}
+        for port in topology.get("ports", []):
+            ports_by_device.setdefault(port.get("device_id", ""), []).append(port)
+
+        for device_id, ports in ports_by_device.items():
+            if not device_id:
+                continue
+
+            # Only infer when the device has unconnected out/in port pairs.
+            unconnected = [p for p in ports if p["port_id"] not in explicit_ports]
+            out_ports = [p for p in unconnected if str(p.get("direction", "")).lower() == "out"]
+            in_ports = [p for p in unconnected if str(p.get("direction", "")).lower() == "in"]
+            if not out_ports or not in_ports:
+                continue
+
+            out_port = out_ports[0]
+            in_port = in_ports[0]
+            out_id = out_port["port_id"]
+            in_id = in_port["port_id"]
+            link_id = f"inferred-{device_id}-{out_id}-{in_id}"
+            node_id = f"link:{link_id}"
+
+            try:
+                graph.add_node(
+                    EvidenceNode(
+                        id=node_id,
+                        type=NodeType.LINK,
+                        link_id=link_id,
+                        endpoint_a=out_id,
+                        endpoint_b=in_id,
+                        confidence=0.6,
+                        inferred=True,
+                    )
+                )
+            except ValueError:
+                # Inferred link already exists; skip.
+                continue
+
+            graph.add_edge(
+                EvidenceEdge(
+                    source=port_nodes[out_id],
+                    target=node_id,
+                    type=EdgeType.TOPOLOGY,
+                    confidence=0.6,
+                    inferred=True,
+                )
+            )
+            graph.add_edge(
+                EvidenceEdge(
+                    source=port_nodes[in_id],
+                    target=node_id,
+                    type=EdgeType.TOPOLOGY,
+                    confidence=0.6,
+                    inferred=True,
+                )
+            )
+
+    def _mark_isolated_nodes(self, graph: EvidenceGraph) -> None:
+        """Mark Device/Port/Link nodes that do not participate in any TOPOLOGY edge."""
+        data = graph._read()
+        nodes = {n["id"]: n for n in data.get("nodes", [])}
+        topo_participants: Set[str] = set()
+        for edge in data.get("edges", []):
+            if edge.get("type") == EdgeType.TOPOLOGY.value:
+                topo_participants.add(edge["source"])
+                topo_participants.add(edge["target"])
+
+        for node in nodes.values():
+            if node.get("type") in {NodeType.DEVICE.value, NodeType.PORT.value, NodeType.LINK.value}:
+                node["isolated"] = node["id"] not in topo_participants
+        graph._write(data)
 
     def _build_alarms(self, fact_table: Dict[str, Any], graph: EvidenceGraph) -> None:
         alarms: List[Dict[str, Any]] = fact_table.get("alarms", [])
