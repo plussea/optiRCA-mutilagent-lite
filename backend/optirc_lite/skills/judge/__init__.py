@@ -3,6 +3,7 @@
 from typing import Any, Dict, List
 
 from optirc_lite.skills.base import SkillOutput
+from optirc_lite.skills.judge.enricher import LLMHypothesisEnricher
 from optirc_lite.skills.judge.generator import ChainHypothesisGenerator
 from optirc_lite.skills.judge.validator import ChainValidator
 from optirc_lite.skills.schemas import DefaultSkillInput, JudgeSkillOutput
@@ -20,13 +21,15 @@ class PropagationJudgeSkill:
     def __init__(self) -> None:
         self._generator = ChainHypothesisGenerator()
         self._validator = ChainValidator()
+        self._enricher = LLMHypothesisEnricher()
 
     async def can_handle(self, state: AgentState) -> float:
         return 1.0 if state.get("perception") and state.get("evidence_graph") else 0.0
 
     async def run(self, state: AgentState, tools: ToolRegistry) -> SkillOutput:
         raw_candidates = self._generator.generate(state)
-        candidates = self._validator.validate(raw_candidates, state)
+        validated = self._validator.validate(raw_candidates, state)
+        candidates = await self._enricher.enrich(validated, state, tools)
 
         return {
             "result": {"candidates": candidates},

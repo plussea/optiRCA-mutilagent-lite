@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Set
 
 from optirc_lite.skills.base import SkillOutput
+from optirc_lite.skills.critic.llm_reviewer import LLMCounterfactualReviewer
 from optirc_lite.skills.schemas import (
     CriticSkillOutput,
     DefaultSkillInput,
@@ -84,6 +85,9 @@ class RefactorCriticSkill:
     input_schema = DefaultSkillInput
     output_schema = CriticSkillOutput
 
+    def __init__(self) -> None:
+        self._llm_reviewer = LLMCounterfactualReviewer()
+
     async def can_handle(self, state: AgentState) -> float:
         return 1.0 if state.get("candidates") and state.get("evidence_graph") else 0.0
 
@@ -122,17 +126,15 @@ class RefactorCriticSkill:
         if unexplained:
             # Prefer the more specific multi-cluster reason when it covers all unexplained alarms.
             if multi_cluster_reason and unexplained <= set().union(*uncovered):
-                return self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
-            return self._reject(
-                f"top candidate leaves {len(unexplained)} alarm(s) unexplained",
-                "FALLBACK_TO_JUDGE",
-            )
-
-        if multi_cluster_reason:
-            return self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
-
-        # Challenge #2: for Link candidates, both endpoints must have consistent LOS-type alarms.
-        if node_type == NodeType.LINK:
+                result = self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
+            else:
+                result = self._reject(
+                    f"top candidate leaves {len(unexplained)} alarm(s) unexplained",
+                    "FALLBACK_TO_JUDGE",
+                )
+        elif multi_cluster_reason:
+            result = self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
+        elif node_type == NodeType.LINK:
             alarms_a, alarms_b = graph.get_link_endpoint_alarms(root_cause)
             los_types = {"los", "mut_los"}
             a_has_los = any(
@@ -146,24 +148,46 @@ class RefactorCriticSkill:
                 if graph.get_node(b)
             )
             if alarms_a and alarms_b and not (a_has_los and b_has_los):
-                return self._reject(
+                result = self._reject(
                     "link candidate lacks bidirectional LOS consistency",
                     "FALLBACK_TO_RANKER",
                 )
+            else:
+                result = self._pass(top_candidate)
+        else:
+            # Challenge #3: detect disjoint alarm clusters that suggest a missed multi-root cause.
+            clusters = graph.alarm_clusters()
+            if len(clusters) > 1:
+                explained_set = explained
+                uncovered_clusters = [
+                    cluster for cluster in clusters if not (cluster <= explained_set)
+                ]
+                if uncovered_clusters:
+                    result = self._reject(
+                        f"detected {len(uncovered_clusters)} additional alarm cluster(s) not explained by top candidate",
+                        "FALLBACK_TO_JUDGE",
+                    )
+                else:
+                    result = self._pass(top_candidate)
+            else:
+                result = self._pass(top_candidate)
 
-        # Challenge #3: detect disjoint alarm clusters that suggest a missed multi-root cause.
-        clusters = graph.alarm_clusters()
-        if len(clusters) > 1:
-            explained_set = explained
-            uncovered_clusters = [
-                cluster for cluster in clusters if not (cluster <= explained_set)
-            ]
-            if uncovered_clusters:
-                return self._reject(
-                    f"detected {len(uncovered_clusters)} additional alarm cluster(s) not explained by top candidate",
-                    "FALLBACK_TO_JUDGE",
-                )
+        review = await self._llm_reviewer.review(
+            result["result"]["verdict"],
+            result["result"]["reasons"],
+            result["result"]["fallback_action"],
+            state,
+            tools,
+        )
+        result["result"]["reasons"] = review["reasons"]
+        result["result"]["fallback_action"] = review["fallback_action"]
+        if review.get("llm_review_note"):
+            result["result"]["llm_review_note"] = review["llm_review_note"]
+            result["observations"].append({"type": "llm_critic_review", "value": review["llm_review_note"]})
 
+        return result
+
+    def _pass(self, top_candidate: Dict[str, Any]) -> SkillOutput:
         return {
             "result": {
                 "verdict": "pass",
