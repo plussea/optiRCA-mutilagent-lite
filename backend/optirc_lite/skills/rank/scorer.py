@@ -1,32 +1,22 @@
-"""Root Cause Ranker — scores and sorts candidate propagation chains."""
+"""Root Cause Ranker submodules — Feature Scorer and Rank Aggregator."""
 
 from typing import Any, Dict, List
 
-from optirc_lite.skills.base import SkillOutput
-from optirc_lite.skills.schemas import DefaultSkillInput, RankSkillOutput
 from optirc_lite.storage.evidence_graph import (
-    EdgeType,
     EvidenceGraph,
     NodeType,
 )
-from optirc_lite.tools.registry import ToolRegistry
-from optirc_lite.workflow.state import AgentState
 
 
-class RootCauseRankerSkill:
-    name = "rank.candidate_ranker"
-    description = "Score candidate root causes with a six-dimensional vector and rank them."
-    required_tools = []
-    input_schema = DefaultSkillInput
-    output_schema = RankSkillOutput
+class FeatureScorer:
+    """Compute the six-dimensional feature vector for each candidate."""
 
-    async def can_handle(self, state: AgentState) -> float:
-        return 1.0 if state.get("judge") and state.get("evidence_graph") else 0.0
-
-    async def run(self, state: AgentState, tools: ToolRegistry) -> SkillOutput:
-        judge_result: Dict[str, Any] = state.get("judge", {})
-        candidates: List[Dict[str, Any]] = list(judge_result.get("candidates", []))
-        fact_table: Dict[str, Any] = state.get("perception", {})
+    def score(
+        self,
+        candidates: List[Dict[str, Any]],
+        state: Any,
+    ) -> List[Dict[str, Any]]:
+        fact_table: Dict[str, Any] = state.get("perception", {}) if isinstance(state, dict) else {}
         graph = EvidenceGraph()
 
         alarms = {n.id: n for n in graph.get_nodes(NodeType.ALARM)}
@@ -34,24 +24,15 @@ class RootCauseRankerSkill:
         alarm_types = [a.properties.get("alarm_type", "").lower() for a in alarms.values()]
         has_fiber_cut = any("los" in t for t in alarm_types)
 
-        scored = []
+        scored: List[Dict[str, Any]] = []
         for candidate in candidates:
-            score = self._score(candidate, alarms, total_alarms, has_fiber_cut, graph)
-            candidate["score_vector"] = score
-            candidate["confidence"] = round(sum(score) / max(len(score), 1), 3)
+            candidate["score_vector"] = self._compute_vector(
+                candidate, alarms, total_alarms, has_fiber_cut, graph
+            )
             scored.append(candidate)
+        return scored
 
-        scored.sort(key=lambda c: c["confidence"], reverse=True)
-
-        return {
-            "result": {"candidates": scored},
-            "confidence": 0.9 if scored else 0.2,
-            "evidence": [f"排序后返回 {len(scored)} 个候选根因"],
-            "observations": [{"type": "rank_candidates", "value": {"count": len(scored)}}],
-            "next_suggestions": ["critic.diagnosis_critic"],
-        }
-
-    def _score(
+    def _compute_vector(
         self,
         candidate: Dict[str, Any],
         alarms: Dict[str, Any],
@@ -74,7 +55,6 @@ class RootCauseRankerSkill:
             if a.properties.get("timestamp")
         ]
         if timestamps:
-            # If candidate is a link and alarms appear nearly simultaneously, it is plausible.
             time_lead = 0.9 if len(timestamps) >= 2 and self._time_spread(timestamps) <= 2 else 0.6
 
         # coverage: fraction of total alarms in the candidate chain
@@ -120,3 +100,17 @@ class RootCauseRankerSkill:
             return (max(parsed) - min(parsed)).total_seconds()
         except Exception:
             return float("inf")
+
+
+class RankAggregator:
+    """Weighted fusion, conflict penalty, and Top-K sorting."""
+
+    def aggregate(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        aggregated: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            score_vector = candidate.get("score_vector", [])
+            candidate["confidence"] = round(sum(score_vector) / max(len(score_vector), 1), 3)
+            aggregated.append(candidate)
+
+        aggregated.sort(key=lambda c: c.get("confidence", 0.0), reverse=True)
+        return aggregated
