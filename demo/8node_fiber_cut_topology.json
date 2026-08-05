@@ -1,0 +1,37 @@
+{
+  "devices": [
+    {"device_id": "NE-A", "type": "OTN"},
+    {"device_id": "NE-B", "type": "OTN"},
+    {"device_id": "NE-C", "type": "OTN"},
+    {"device_id": "NE-D", "type": "OTN"},
+    {"device_id": "NE-E", "type": "OTN"},
+    {"device_id": "NE-F", "type": "OTN"},
+    {"device_id": "NE-G", "type": "OTN"},
+    {"device_id": "NE-H", "type": "OTN"}
+  ],
+  "ports": [
+    {"port_id": "NE-A:A-B", "device_id": "NE-A", "direction": "out"},
+    {"port_id": "NE-B:A-B", "device_id": "NE-B", "direction": "in"},
+    {"port_id": "NE-B:B-C", "device_id": "NE-B", "direction": "out"},
+    {"port_id": "NE-C:B-C", "device_id": "NE-C", "direction": "in"},
+    {"port_id": "NE-C:C-D", "device_id": "NE-C", "direction": "out"},
+    {"port_id": "NE-D:C-D", "device_id": "NE-D", "direction": "in"},
+    {"port_id": "NE-D:D-E", "device_id": "NE-D", "direction": "out"},
+    {"port_id": "NE-E:D-E", "device_id": "NE-E", "direction": "in"},
+    {"port_id": "NE-E:E-F", "device_id": "NE-E", "direction": "out"},
+    {"port_id": "NE-F:E-F", "device_id": "NE-F", "direction": "in"},
+    {"port_id": "NE-F:F-G", "device_id": "NE-F", "direction": "out"},
+    {"port_id": "NE-G:F-G", "device_id": "NE-G", "direction": "in"},
+    {"port_id": "NE-G:G-H", "device_id": "NE-G", "direction": "out"},
+    {"port_id": "NE-H:G-H", "device_id": "NE-H", "direction": "in"}
+  ],
+  "links": [
+    {"link_id": "A-B", "endpoint_a": "NE-A:A-B", "endpoint_b": "NE-B:A-B", "length_km": 10},
+    {"link_id": "B-C", "endpoint_a": "NE-B:B-C", "endpoint_b": "NE-C:B-C", "length_km": 10},
+    {"link_id": "C-D", "endpoint_a": "NE-C:C-D", "endpoint_b": "NE-D:C-D", "length_km": 10},
+    {"link_id": "D-E", "endpoint_a": "NE-D:D-E", "endpoint_b": "NE-E:D-E", "length_km": 10},
+    {"link_id": "E-F", "endpoint_a": "NE-E:E-F", "endpoint_b": "NE-F:E-F", "length_km": 10},
+    {"link_id": "F-G", "endpoint_a": "NE-F:F-G", "endpoint_b": "NE-G:F-G", "length_km": 10},
+    {"link_id": "G-H", "endpoint_a": "NE-G:G-H", "endpoint_b": "NE-H:G-H", "length_km": 10}
+  ]
+}
