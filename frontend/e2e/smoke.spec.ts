@@ -1,43 +1,35 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Diagnosis dashboard smoke test", () => {
-  test("runs 8-node demo and shows diagnosis result", async ({ page }) => {
+test.describe("OptiRCA diagnosis workbench", () => {
+  test("loads the real demo, runs diagnosis, and records human confirmation", async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+
     await page.goto("/");
+    await expect(page.getByRole("heading", { name: "从并发告警中，定位一个可执行的物理根因" })).toBeVisible();
 
-    // Wait for landing state.
-    await expect(page.getByRole("heading", { name: /OptiRCA Lite/i })).toBeVisible();
+    await page.getByRole("button", { name: /加载真实 Demo/ }).click();
+    await expect(page.getByText("输入已就绪")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("8", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("权威拓扑 · 可信度 100%")).toBeVisible();
 
-    // Run demo.
-    const runDemoButton = page.getByRole("button", { name: /运行 Demo/i });
-    await expect(runDemoButton).toBeVisible();
-    await runDemoButton.click();
-
-    // Wait for diagnosis to complete: conclusion bar shows a root cause or degraded state.
-    const conclusionBar = page.getByTestId("conclusion-bar");
-    await expect(conclusionBar).toHaveAttribute("data-risk", /normal|review|degraded/, {
+    await page.getByRole("button", { name: "开始诊断" }).click();
+    await expect(page.getByText("诊断运行中", { exact: false })).toBeVisible();
+    await expect(page.getByTestId("conclusion-card")).toContainText("N1-N2 光纤链路故障", {
       timeout: 120000,
     });
+    await expect(page.getByTestId("demo-expectation")).toContainText("根因匹配");
+    await expect(page.getByTestId("business-topology")).toBeVisible();
 
-    // Verify conclusion bar contains diagnosis status text.
-    await expect(conclusionBar).toContainText(/诊断完成|需要人工审核|诊断降级/, {
-      timeout: 120000,
-    });
+    const stageLabels = ["告警解析", "拓扑构建", "传播判断", "根因排序", "可信度复核", "案卷组装"];
+    for (const label of stageLabels) await expect(page.getByText(label, { exact: true })).toBeVisible();
 
-    // Wait for playback to finish: assemble stage should be visible and done/running.
-    const assembleButton = page.getByRole("button", { name: "组装" });
-    await expect(assembleButton).toBeVisible({ timeout: 30000 });
+    await page.getByRole("button", { name: "确认根因" }).click();
+    await expect(page.getByText("反馈已写入诊断案卷")).toBeVisible();
+    await expect(page.getByText("已人工确认系统根因")).toBeVisible();
 
-    // Evidence graph should contain the root-cause node if present.
-    const rootCauseNode = page.locator('[data-testid^="node-"]').first();
-    await expect(rootCauseNode).toBeVisible({ timeout: 30000 });
-
-    // If review is required, the review panel should appear.
-    const risk = await page.getByTestId("conclusion-bar").getAttribute("data-risk");
-    if (risk === "review") {
-      await expect(page.getByRole("complementary").getByText("需要人工审核")).toBeVisible();
-      await expect(page.getByRole("button", { name: "批准" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "驳回" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "升级" })).toBeVisible();
-    }
+    expect(consoleErrors).toEqual([]);
   });
 });

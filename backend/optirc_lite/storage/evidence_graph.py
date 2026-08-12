@@ -1,6 +1,8 @@
 """Heterogeneous evidence graph — shared blackboard for the multi-Agent diagnosis system."""
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -8,6 +10,19 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel, Field, model_validator
 
 from optirc_lite.config import settings
+
+
+_active_graph_path: ContextVar[Path | None] = ContextVar("active_evidence_graph_path", default=None)
+
+
+@contextmanager
+def use_evidence_graph(path: Path):
+    """Bind the shared blackboard to the current async diagnosis context."""
+    token = _active_graph_path.set(path)
+    try:
+        yield
+    finally:
+        _active_graph_path.reset(token)
 
 
 class NodeType(str, Enum):
@@ -111,7 +126,12 @@ class EvidenceGraph:
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or settings.evidence_graph_path
+        self.path = path or _active_graph_path.get() or settings.evidence_graph_path
+
+    @classmethod
+    def for_session(cls, session_id: str) -> "EvidenceGraph":
+        base_path = settings.evidence_graph_path
+        return cls(path=base_path.parent / "evidence_graph_sessions" / f"{session_id}.json")
 
     def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +140,11 @@ class EvidenceGraph:
                 json.dumps({"nodes": [], "edges": []}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+
+    def reset(self) -> None:
+        """Start this graph namespace from an empty shared blackboard."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._write({"nodes": [], "edges": []})
 
     def _read(self) -> Dict[str, Any]:
         return json.loads(self.path.read_text(encoding="utf-8"))
@@ -576,4 +601,3 @@ class EvidenceGraph:
 
 # Module-level singleton for callers that don't manage their own graph path.
 evidence_graph = EvidenceGraph()
-

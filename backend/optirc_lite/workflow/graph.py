@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
@@ -11,6 +12,62 @@ from optirc_lite.workflow.state import AgentState
 
 runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
 
+STAGE_SUMMARIES = {
+    "perception": "告警文件已解析为结构化事实表",
+    "topology": "业务拓扑与告警证据已关联",
+    "judge": "传播关系已生成根因假设",
+    "rank": "候选根因已完成多维排序",
+    "critic": "候选根因已完成可信度复核",
+    "dossier": "诊断结论与证据已写入案卷",
+}
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_ms(session_id: str, phase: str) -> int:
+    starts = [
+        event
+        for event in store.list_events(session_id)
+        if event["phase"] == f"{phase}.start"
+    ]
+    if not starts:
+        return 0
+    started_at = datetime.fromisoformat(starts[-1]["created_at"])
+    return max(0, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
+
+
+def _critic_checks(critic: Dict[str, Any]) -> list[Dict[str, Any]]:
+    reasons = [str(reason) for reason in critic.get("reasons", [])]
+    reason_text = " ".join(reasons).lower()
+    checks = [
+        (
+            "alarm_coverage",
+            "告警解释完整性",
+            not any(token in reason_text for token in ("unexplained", "leaves")),
+        ),
+        (
+            "endpoint_consistency",
+            "链路两端一致性",
+            "bidirectional" not in reason_text,
+        ),
+        (
+            "single_fault",
+            "单一故障合理性",
+            "cluster" not in reason_text,
+        ),
+    ]
+    return [
+        {
+            "id": check_id,
+            "label": label,
+            "passed": passed,
+            "reason": "；".join(reasons) if not passed else "本轮反事实检查通过",
+        }
+        for check_id, label, passed in checks
+    ]
+
 
 def _record_event(state: AgentState, phase: str, event: str, payload: Dict[str, Any]) -> None:
     session_id = state.get("session_id")
@@ -19,7 +76,22 @@ def _record_event(state: AgentState, phase: str, event: str, payload: Dict[str, 
     if event == "start":
         running_state = {**state, "status": f"{phase}_running"}
         store.upsert_session(session_id, running_state["status"], running_state)
-    store.add_event(session_id, f"{phase}.{event}", payload)
+        event_payload = {
+            "type": "stage.started",
+            "stage": phase,
+            "timestamp": _utc_now(),
+            **payload,
+        }
+    else:
+        event_payload = {
+            "type": "stage.completed",
+            "stage": phase,
+            "timestamp": _utc_now(),
+            "elapsed_ms": _elapsed_ms(session_id, phase),
+            "summary": STAGE_SUMMARIES.get(phase, f"{phase} 已完成"),
+            "artifact": payload,
+        }
+    store.add_event(session_id, f"{phase}.{event}", event_payload)
 
 
 def _finish_phase(state: AgentState, phase: str, update: Dict[str, Any]) -> Dict[str, Any]:
@@ -38,6 +110,40 @@ def _finish_phase(state: AgentState, phase: str, update: Dict[str, Any]) -> Dict
             "tool_calls": next_state.get("tool_calls", [])[-1:],
         },
     )
+    timestamp = _utc_now()
+    if phase == "topology":
+        store.add_event(
+            session_id,
+            "topology.updated",
+            {
+                "type": "topology.updated",
+                "timestamp": timestamp,
+                "topology": next_state.get("topology", {}),
+            },
+        )
+    elif phase == "rank":
+        store.add_event(
+            session_id,
+            "candidates.updated",
+            {
+                "type": "candidates.updated",
+                "timestamp": timestamp,
+                "candidates": next_state.get("candidates", []),
+            },
+        )
+    elif phase == "critic":
+        critic = next_state.get("critic", {})
+        store.add_event(
+            session_id,
+            "critic.checked",
+            {
+                "type": "critic.checked",
+                "timestamp": timestamp,
+                "checks": _critic_checks(critic),
+                "verdict": critic.get("verdict"),
+                "fallback_action": critic.get("fallback_action"),
+            },
+        )
     return update
 
 
@@ -100,11 +206,18 @@ async def rank_node(state: AgentState) -> Dict[str, Any]:
     _record_event(state, "rank", "start", {"input": state.get("judge", {})})
     try:
         result = await runtime.run_phase("rank", state)
-        update = _finish_phase(state, "rank", {**result, "status": "ranked"})
-        rank = update.get("rank", {})
+        rank = result.get("rank", {})
         if not rank:
-            return {**update, "degradation_reason": "ranker_timeout"}
-        update["candidates"] = rank.get("candidates", [])
+            return {**result, "status": "ranked", "degradation_reason": "ranker_timeout"}
+        update = _finish_phase(
+            state,
+            "rank",
+            {
+                **result,
+                "status": "ranked",
+                "candidates": rank.get("candidates", []),
+            },
+        )
         update["evidence_graph"] = _current_evidence_graph()
         return update
     except Exception as exc:
@@ -143,8 +256,6 @@ def route_after_critic(state: AgentState) -> str:
 
 
 def _build_success_response(state: AgentState) -> Dict[str, Any]:
-    from datetime import datetime, timezone
-
     candidates = state.get("candidates", [])
     top = candidates[0] if candidates else {}
     return {
@@ -158,6 +269,8 @@ def _build_success_response(state: AgentState) -> Dict[str, Any]:
         "requires_human_review": False,
         "input": state.get("input", {}),
         "evidence_graph": state.get("evidence_graph", {"nodes": [], "edges": []}),
+        "candidates": candidates,
+        "critic_checks": _critic_checks(state.get("critic", {})),
         "critic_verdict": "pass",
         "metadata": {
             "phases_completed": ["perception", "topology", "judge", "rank", "critic"],
@@ -181,6 +294,8 @@ def _build_degraded_response(state: AgentState) -> Dict[str, Any]:
         "degradation_reason": reason,
         "input": state.get("input", {}),
         "evidence_graph": state.get("evidence_graph", {"nodes": [], "edges": []}),
+        "candidates": state.get("candidates", []),
+        "critic_checks": _critic_checks(state.get("critic", {})),
         "critic_verdict": state.get("critic", {}).get("verdict") if state.get("critic") else None,
         "error": state.get("error_message"),
     }
@@ -205,6 +320,7 @@ def _persist_dossier(state: AgentState) -> None:
 
 
 async def assemble_success_node(state: AgentState) -> Dict[str, Any]:
+    _record_event(state, "dossier", "start", {"input": {"dossier_id": state.get("dossier_id")}})
     response = _build_success_response(state)
     update = {
         "status": "success",
@@ -212,10 +328,11 @@ async def assemble_success_node(state: AgentState) -> Dict[str, Any]:
     }
     next_state = {**state, **update}
     _persist_dossier(next_state)
-    return update
+    return _finish_phase(state, "dossier", update)
 
 
 async def assemble_degraded_node(state: AgentState) -> Dict[str, Any]:
+    _record_event(state, "dossier", "start", {"input": {"dossier_id": state.get("dossier_id")}})
     if not state.get("degradation_reason"):
         critic = state.get("critic", {})
         max_rounds = state.get("max_fallback_rounds", 0)
@@ -231,7 +348,7 @@ async def assemble_degraded_node(state: AgentState) -> Dict[str, Any]:
     }
     next_state = {**state, **update}
     _persist_dossier(next_state)
-    return update
+    return _finish_phase(state, "dossier", update)
 
 
 def route_degradation(state: AgentState) -> str:

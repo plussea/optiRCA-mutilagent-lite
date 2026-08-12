@@ -7,17 +7,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from optirc_lite.config import settings
+from optirc_lite.preflight import (
+    PreflightRecord,
+    prepare_topology,
+    preflight_repository,
+    sample_summary,
+)
 from optirc_lite.runtime.agent_runtime import AgentRuntime
 from optirc_lite.skills.archivist import archivist
 from optirc_lite.skills.builtin import create_builtin_skills
 from optirc_lite.skills.evaluator import evaluator
 from optirc_lite.skills.gepa import gepa
-from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph
+from optirc_lite.storage.evidence_graph import EvidenceGraph, evidence_graph, use_evidence_graph
 from optirc_lite.storage.graph_store import graph_store
 from optirc_lite.storage.sqlite_store import store
 from optirc_lite.storage.vector_store import vector_store
@@ -49,6 +56,7 @@ app.add_middleware(
 workflow = build_workflow()
 closure_runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
 refactor_runtime = AgentRuntime(skills=create_builtin_skills(), tools=create_builtin_tools())
+diagnosis_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def _initial_state(session_id: str, raw_input: Path) -> AgentState:
@@ -154,6 +162,17 @@ class CriticRequest(BaseModel):
     max_fallback_rounds: int = 0
 
 
+class CreateDiagnosisRequest(BaseModel):
+    preflight_id: str
+    max_fallback_rounds: int = 2
+
+
+class DiagnosisReviewRequest(BaseModel):
+    decision: str
+    ground_truth: Dict[str, Any] | None = None
+    notes: str = ""
+
+
 def _degraded_critic_response(reason: str, exc: Exception | None = None) -> Dict[str, Any]:
     return {
         "status": "degraded",
@@ -177,6 +196,70 @@ def _degraded_judge_response(reason: str, exc: Exception | None = None) -> Dict[
         "requires_human_review": True,
         "degradation_reason": reason,
         "error": str(exc) if exc else None,
+    }
+
+
+@app.post("/api/v1/preflight")
+async def preflight_diagnosis_sample(
+    alarms: UploadFile = File(...),
+    topology: str | None = Form(None),
+    topology_file: UploadFile | None = File(None),
+) -> Dict[str, Any]:
+    if not alarms.filename or not alarms.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="告警文件必须是 CSV。")
+
+    topology_data: Dict[str, Any] | None = None
+    topology_text = topology
+    if topology_file is not None:
+        topology_text = (await topology_file.read()).decode("utf-8-sig")
+    if topology_text:
+        try:
+            topology_data = json.loads(topology_text)
+        except json.JSONDecodeError as exc:
+            return {
+                "status": "input_not_ready",
+                "preflight_id": f"PF-{str(uuid.uuid4())[:8].upper()}",
+                "sample_summary": {},
+                "topology": {"source": "provided", "confidence": 0.0, "devices": [], "ports": [], "links": []},
+                "issues": [{"code": "TOPOLOGY_INVALID", "message": "拓扑 JSON 无法解析。", "detail": str(exc)}],
+            }
+
+    preflight_id = f"PF-{str(uuid.uuid4())[:8].upper()}"
+    settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    target = settings.upload_dir / f"{preflight_id}_{Path(alarms.filename).name}"
+    with target.open("wb") as handle:
+        shutil.copyfileobj(alarms.file, handle)
+
+    perception_update = await refactor_runtime.run_phase(
+        "perception", {"raw_input": str(target), "perception": {}}
+    )
+    fact_table = perception_update.get("perception", {})
+    prepared_topology, issues = prepare_topology(fact_table, topology_data)
+    status = "input_not_ready" if issues else "ready"
+    record = PreflightRecord(
+        preflight_id=preflight_id,
+        alarm_path=str(target),
+        filename=alarms.filename,
+        fact_table=fact_table,
+        topology=prepared_topology,
+        status=status,
+        issues=issues,
+    )
+    preflight_repository.save(record)
+    return {
+        "status": status,
+        "preflight_id": preflight_id,
+        "sample_summary": sample_summary(fact_table),
+        "alarms": fact_table.get("alarms", []),
+        "topology": prepared_topology or {
+            "source": "inferred" if topology_data is None else "provided",
+            "confidence": 0.0,
+            "devices": [],
+            "ports": [],
+            "links": [],
+            "inference_explanations": [],
+        },
+        "issues": issues,
     }
 
 
@@ -388,31 +471,36 @@ async def _run_diagnose_workflow(
 ) -> Dict[str, Any]:
     """Run the compiled LangGraph diagnosis workflow and return the dossier response."""
     wf = build_workflow()
-    try:
-        final_state = await asyncio.wait_for(wf.ainvoke(state), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
+    session_id = state.get("session_id", "unknown")
+    session_graph = EvidenceGraph.for_session(session_id)
+    session_graph.reset()
+
+    with use_evidence_graph(session_graph.path):
+        try:
+            final_state = await asyncio.wait_for(wf.ainvoke(state), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            response = _degraded_diagnose_response(
+                "critic_timeout", input_payload, session_graph._read(), dossier_id, session_id
+            )
+            _archive_from_response(dossier_id, state, response)
+            return response
+        except Exception as exc:
+            response = _degraded_diagnose_response(
+                "agent_failure", input_payload, session_graph._read(), dossier_id, session_id, exc
+            )
+            _archive_from_response(dossier_id, state, response)
+            return response
+
+        response = final_state.get("response")
+        if response:
+            _archive_from_response(dossier_id, final_state, response)
+            return response
+
         response = _degraded_diagnose_response(
-            "critic_timeout", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id")
+            "agent_failure", input_payload, session_graph._read(), dossier_id, session_id
         )
         _archive_from_response(dossier_id, state, response)
         return response
-    except Exception as exc:
-        response = _degraded_diagnose_response(
-            "agent_failure", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id"), exc
-        )
-        _archive_from_response(dossier_id, state, response)
-        return response
-
-    response = final_state.get("response")
-    if response:
-        _archive_from_response(dossier_id, final_state, response)
-        return response
-
-    response = _degraded_diagnose_response(
-        "agent_failure", input_payload, EvidenceGraph()._read(), dossier_id, state.get("session_id")
-    )
-    _archive_from_response(dossier_id, state, response)
-    return response
 
 
 def _archive_from_response(
@@ -421,6 +509,7 @@ def _archive_from_response(
     response: Dict[str, Any],
     human_decision: Optional[str] = None,
     human_notes: Optional[str] = None,
+    ground_truth: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Archive a dossier from a final API response and workflow state."""
     candidates = state.get("candidates", [])
@@ -438,6 +527,7 @@ def _archive_from_response(
         requires_human_review=response.get("requires_human_review", True),
         human_decision=human_decision,
         human_notes=human_notes,
+        ground_truth=ground_truth,
     )
 
 
@@ -501,6 +591,298 @@ async def diagnose(
     }
 
     return await _run_diagnose_workflow(state, dossier_id, input_payload)
+
+
+async def _execute_async_diagnosis(state: AgentState) -> None:
+    """Run one persisted diagnosis and publish a terminal event."""
+    session_id = state["session_id"]
+    dossier_id = state["dossier_id"]
+    session_graph = EvidenceGraph.for_session(session_id)
+    session_graph.reset()
+    final_state: AgentState = state
+
+    try:
+        with use_evidence_graph(session_graph.path):
+            final_state = await asyncio.wait_for(build_workflow().ainvoke(state), timeout=30.0)
+        response = final_state.get("response") or _degraded_diagnose_response(
+            "agent_failure",
+            state.get("input", {}),
+            session_graph._read(),
+            dossier_id,
+            session_id,
+        )
+        final_state = {**final_state, "status": response["status"], "response": response}
+        _archive_from_response(dossier_id, final_state, response)
+        terminal_type = (
+            "diagnosis.completed" if response["status"] == "success" else "diagnosis.degraded"
+        )
+        store.add_event(
+            session_id,
+            terminal_type,
+            {
+                "type": terminal_type,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "result": response,
+            },
+        )
+        store.upsert_session(session_id, response["status"], final_state)
+    except asyncio.CancelledError:
+        persisted = store.get_session(session_id) or state
+        cancelled_state = {
+            **persisted,
+            "status": "cancelled",
+            "response": {},
+            "dossier_id": None,
+        }
+        store.add_event(
+            session_id,
+            "diagnosis.cancelled",
+            {
+                "type": "diagnosis.cancelled",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        store.upsert_session(session_id, "cancelled", cancelled_state)
+    except Exception as exc:
+        response = _degraded_diagnose_response(
+            "agent_failure",
+            state.get("input", {}),
+            session_graph._read(),
+            dossier_id,
+            session_id,
+            exc,
+        )
+        final_state = {**final_state, "status": "degraded", "response": response}
+        _archive_from_response(dossier_id, final_state, response)
+        store.add_event(
+            session_id,
+            "diagnosis.degraded",
+            {
+                "type": "diagnosis.degraded",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "result": response,
+            },
+        )
+        store.upsert_session(session_id, "degraded", final_state)
+    finally:
+        diagnosis_tasks.pop(session_id, None)
+
+
+@app.post("/api/v1/diagnoses", status_code=202)
+async def create_async_diagnosis(request: CreateDiagnosisRequest) -> Dict[str, Any]:
+    record = preflight_repository.get(request.preflight_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "PREFLIGHT_NOT_FOUND", "message": "输入预检不存在或已过期。"},
+        )
+    if record.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PREFLIGHT_NOT_READY", "message": "输入预检尚未通过，不能开始诊断。"},
+        )
+    if record.consumed_by:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PREFLIGHT_ALREADY_CONSUMED", "message": "该输入已创建诊断运行。"},
+        )
+
+    session_id = str(uuid.uuid4())
+    claimed = preflight_repository.claim(request.preflight_id, session_id)
+    if claimed is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PREFLIGHT_ALREADY_CONSUMED", "message": "该输入已创建诊断运行。"},
+        )
+
+    dossier_id = f"DOS-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    input_payload = {
+        "filename": claimed.filename,
+        "preflight_id": claimed.preflight_id,
+        "topology": claimed.topology,
+        "topology_source": claimed.topology.get("source", "provided"),
+        "topology_confidence": claimed.topology.get("confidence", 1.0),
+    }
+    state = _initial_state(session_id, Path(claimed.alarm_path))
+    state.update(
+        {
+            "status": "running",
+            "topology": claimed.topology,
+            "max_fallback_rounds": max(0, min(request.max_fallback_rounds, 5)),
+            "dossier_id": dossier_id,
+            "input": input_payload,
+            "preflight_id": claimed.preflight_id,
+        }
+    )
+    store.upsert_session(session_id, "running", state)
+    store.add_event(
+        session_id,
+        "diagnosis.started",
+        {
+            "type": "diagnosis.started",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "preflight_id": claimed.preflight_id,
+        },
+    )
+    task = asyncio.create_task(_execute_async_diagnosis(state))
+    diagnosis_tasks[session_id] = task
+    return {
+        "session_id": session_id,
+        "status": "running",
+        "events_url": f"/api/v1/diagnoses/{session_id}/events",
+    }
+
+
+@app.get("/api/v1/diagnoses/{session_id}")
+async def get_async_diagnosis(session_id: str) -> Dict[str, Any]:
+    state = store.get_session(session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="diagnosis session not found")
+    raw_status = state.get("status", "unknown")
+    public_status = raw_status if raw_status in {"success", "degraded", "cancelled"} else "running"
+    return {
+        "session_id": session_id,
+        "status": public_status,
+        "preflight_id": state.get("preflight_id"),
+        "dossier_id": state.get("dossier_id"),
+        "result": state.get("response") or None,
+        "input": state.get("input") or None,
+        "review": state.get("human_review") or {"status": "unreviewed"},
+        "events_url": f"/api/v1/diagnoses/{session_id}/events",
+    }
+
+
+@app.get("/api/v1/diagnoses/{session_id}/events")
+async def stream_diagnosis_events(
+    session_id: str,
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    if store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="diagnosis session not found")
+    try:
+        cursor = max(0, int(last_event_id or "0"))
+    except ValueError:
+        cursor = 0
+
+    async def event_stream():
+        nonlocal cursor
+        while True:
+            events = store.list_events(session_id, after_id=cursor)
+            for event in events:
+                cursor = event["id"]
+                data = json.dumps(event["payload"], ensure_ascii=False, separators=(",", ":"))
+                yield f"id: {event['id']}\ndata: {data}\n\n"
+
+            state = store.get_session(session_id) or {}
+            if state.get("status") in {"success", "degraded", "cancelled"} and not store.list_events(
+                session_id, after_id=cursor
+            ):
+                break
+            await asyncio.sleep(0.08)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/v1/diagnoses/{session_id}/cancel", status_code=202)
+async def cancel_async_diagnosis(session_id: str) -> Dict[str, Any]:
+    state = store.get_session(session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="diagnosis session not found")
+    if state.get("status") in {"success", "degraded", "cancelled"}:
+        raise HTTPException(status_code=409, detail="diagnosis is already terminal")
+    task = diagnosis_tasks.get(session_id)
+    if task is None:
+        raise HTTPException(status_code=409, detail="diagnosis task is not active")
+    task.cancel()
+    return {"session_id": session_id, "status": "cancelling"}
+
+
+def _topology_root_ids(topology: Dict[str, Any]) -> set[str]:
+    return {
+        *(f"dev:{device['device_id']}" for device in topology.get("devices", []) if device.get("device_id")),
+        *(f"port:{port['port_id']}" for port in topology.get("ports", []) if port.get("port_id")),
+        *(f"link:{link['link_id']}" for link in topology.get("links", []) if link.get("link_id")),
+    }
+
+
+@app.post("/api/v1/diagnoses/{session_id}/review")
+async def review_async_diagnosis(
+    session_id: str,
+    request: DiagnosisReviewRequest,
+) -> Dict[str, Any]:
+    state = store.get_session(session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="diagnosis session not found")
+    if state.get("status") not in {"success", "degraded"} or not state.get("response"):
+        raise HTTPException(status_code=409, detail="diagnosis has no reviewable result")
+    if request.decision not in {"confirmed", "corrected", "expert_review_requested"}:
+        raise HTTPException(status_code=422, detail="unsupported review decision")
+
+    prediction = state["response"].get("root_cause") or {}
+    ground_truth: Dict[str, Any] | None = None
+    if request.decision == "confirmed":
+        root_cause = prediction.get("root_cause")
+        if not root_cause:
+            raise HTTPException(status_code=422, detail="degraded result has no root cause to confirm")
+        ground_truth = {"root_cause": root_cause}
+    elif request.decision == "corrected":
+        root_cause = (request.ground_truth or {}).get("root_cause")
+        if not root_cause:
+            raise HTTPException(status_code=422, detail="corrected review requires ground_truth.root_cause")
+        topology = state.get("input", {}).get("topology", {})
+        if root_cause not in _topology_root_ids(topology):
+            raise HTTPException(status_code=422, detail="ground truth must reference the business topology")
+        ground_truth = {"root_cause": root_cause}
+    elif request.ground_truth is not None:
+        raise HTTPException(status_code=422, detail="expert review request cannot include ground truth")
+
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    review = {
+        "status": request.decision,
+        "ground_truth": ground_truth,
+        "notes": request.notes,
+        "reviewed_at": reviewed_at,
+    }
+    state["human_decision"] = request.decision
+    state["human_review"] = review
+    store.upsert_session(session_id, state["status"], state)
+    store.add_event(
+        session_id,
+        "human.reviewed",
+        {
+            "type": "human.reviewed",
+            "timestamp": reviewed_at,
+            "review": review,
+        },
+    )
+    _archive_from_response(
+        state["dossier_id"],
+        state,
+        state["response"],
+        request.decision,
+        request.notes,
+        ground_truth,
+    )
+    return {"session_id": session_id, "dossier_id": state["dossier_id"], "review": review}
+
+
+@app.get("/api/v1/examples/demo")
+async def get_demo_example() -> Dict[str, Any]:
+    demo_dir = Path(__file__).resolve().parents[3] / "demo"
+    try:
+        return {
+            "alarm_filename": "alarm1.csv",
+            "alarm_content": (demo_dir / "alarm1.csv").read_text(encoding="utf-8-sig"),
+            "topology_filename": "topology.json",
+            "topology": json.loads((demo_dir / "topology.json").read_text(encoding="utf-8")),
+            "expected": json.loads((demo_dir / "expected.json").read_text(encoding="utf-8")),
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="demo files are incomplete") from exc
 
 
 @app.post("/v1/sessions")

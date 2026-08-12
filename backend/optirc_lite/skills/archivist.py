@@ -45,7 +45,14 @@ class CaseArchivist:
         )
 
         status = "success" if not requires_human_review and not degradation_reason else "degraded"
-        if human_decision in {"approved", "rejected", "escalated"}:
+        if human_decision in {
+            "approved",
+            "rejected",
+            "escalated",
+            "confirmed",
+            "corrected",
+            "expert_review_requested",
+        }:
             status = human_decision
 
         store.upsert_dossier(
@@ -122,7 +129,11 @@ class CaseArchivist:
         if not top or not top.get("root_cause"):
             return
 
-        is_positive = dossier.get("feedback_layer", {}).get("human_decision") in {"approved", None}
+        is_positive = dossier.get("feedback_layer", {}).get("human_decision") in {
+            "approved",
+            "confirmed",
+            None,
+        }
         if not is_positive:
             return
 

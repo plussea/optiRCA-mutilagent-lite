@@ -1,48 +1,77 @@
-export type SessionStatus =
-  | "init"
-  | "perception_running"
-  | "diagnosis_running"
-  | "validation_running"
-  | "planning_running"
-  | "solution_validation_running"
-  | "human_review_running"
-  | "closure_running"
-  | "perceived"
-  | "diagnosed"
-  | "diagnosis_validated"
-  | "planned"
-  | "solution_validated"
-  | "waiting_review"
-  | "closed"
-  | "rejected"
-  | "escalated"
+export type WorkbenchStatus =
+  | "idle"
+  | "preflighting"
+  | "ready"
+  | "input_not_ready"
+  | "running"
+  | "success"
+  | "degraded"
+  | "cancelled"
   | "error";
 
-export interface SessionState {
-  session_id: string;
-  status: SessionStatus;
-  pending_human: boolean;
-  human_decision?: string | null;
-  perception?: Record<string, any>;
-  diagnosis?: Record<string, any>;
-  validation?: Record<string, any>;
-  planning?: Record<string, any>;
-  solution_validation?: Record<string, any>;
-  human_review?: Record<string, any>;
-  closure?: Record<string, any>;
-  observations?: Array<Record<string, any>>;
-  tool_calls?: Array<Record<string, any>>;
-  decision_trace?: Array<Record<string, any>>;
-  error_message?: string | null;
+export interface Device {
+  device_id: string;
+  type?: string;
 }
 
-export interface WorkflowEvent {
-  phase: string;
-  payload: Record<string, any>;
-  created_at: string;
+export interface Port {
+  port_id: string;
+  device_id: string;
+  direction?: "in" | "out" | null;
 }
 
-// ---- New /api/v1/diagnose types -------------------------------------------------
+export interface TopologyLink {
+  link_id: string;
+  endpoint_a: string;
+  endpoint_b: string;
+  length_km?: number;
+  confidence?: number;
+  inferred?: boolean;
+  inference_explanation?: string;
+}
+
+export interface BusinessTopology {
+  source: "provided" | "inferred";
+  confidence: number;
+  devices: Device[];
+  ports: Port[];
+  links: TopologyLink[];
+  inference_explanations?: string[];
+}
+
+export interface AlarmFact {
+  alarm_id: string;
+  type: string;
+  device_id: string;
+  port_id?: string;
+  severity?: string;
+  timestamp?: string;
+  location?: string;
+}
+
+export interface SampleSummary {
+  alarm_count: number;
+  severity_counts: Record<string, number>;
+  device_count: number;
+  alarm_types: string[];
+  time_window: { start: string | null; end: string | null };
+}
+
+export interface PreflightIssue {
+  code: string;
+  message: string;
+  objects?: string[];
+  required_fields?: string[];
+}
+
+export interface PreflightResult {
+  status: "ready" | "input_not_ready";
+  preflight_id: string;
+  sample_summary: SampleSummary;
+  topology: BusinessTopology;
+  alarms: AlarmFact[];
+  issues: PreflightIssue[];
+}
 
 export interface EvidenceNode {
   id: string;
@@ -51,18 +80,10 @@ export interface EvidenceNode {
   port_id?: string;
   link_id?: string;
   alarm_id?: string;
-  service_id?: string;
   alarm_type?: string;
   severity?: string;
   timestamp?: string;
-  direction?: "in" | "out";
-  endpoint_a?: string;
-  endpoint_b?: string;
-  length_km?: number;
-  inferred?: boolean;
-  isolated?: boolean;
-  confidence?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface EvidenceEdge {
@@ -70,11 +91,7 @@ export interface EvidenceEdge {
   target: string;
   type: "BELONGS_TO" | "TOPOLOGY" | "PROPAGATES" | "CARRIES";
   confidence?: number;
-  distance_km?: number;
-  latency_ms?: number;
-  probability?: number;
-  delay_ms?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface EvidenceGraph {
@@ -85,14 +102,20 @@ export interface EvidenceGraph {
 export interface RootCauseCandidate {
   root_cause: string;
   confidence: number;
-  score_vector: number[];
+  score_vector?: number[];
   evidence_chain: string[];
-  llm_enriched?: boolean;
   validation?: {
     direction_check: boolean;
     time_check: boolean;
     coverage_check: boolean;
   };
+}
+
+export interface CredibilityCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+  reason: string;
 }
 
 export interface DiagnosisResult {
@@ -106,9 +129,14 @@ export interface DiagnosisResult {
   requires_human_review: boolean;
   input: {
     filename?: string;
-    topology?: Record<string, any>;
+    preflight_id?: string;
+    topology?: BusinessTopology;
+    topology_source?: string;
+    topology_confidence?: number;
   };
   evidence_graph: EvidenceGraph;
+  candidates?: RootCauseCandidate[];
+  critic_checks?: CredibilityCheck[];
   critic_verdict: "pass" | "reject" | null;
   metadata?: {
     phases_completed?: string[];
@@ -119,31 +147,80 @@ export interface DiagnosisResult {
   error?: string | null;
 }
 
+export type StageId = "perception" | "topology" | "judge" | "rank" | "critic" | "dossier";
+
+export type DiagnosisEvent =
+  | { type: "diagnosis.started"; timestamp: string; preflight_id?: string }
+  | { type: "stage.started"; stage: StageId; timestamp: string }
+  | {
+      type: "stage.completed";
+      stage: StageId;
+      timestamp: string;
+      elapsed_ms: number;
+      summary: string;
+      artifact?: Record<string, unknown>;
+    }
+  | { type: "topology.updated"; timestamp: string; topology: BusinessTopology }
+  | { type: "candidates.updated"; timestamp: string; candidates: RootCauseCandidate[] }
+  | {
+      type: "critic.checked";
+      timestamp: string;
+      checks: CredibilityCheck[];
+      verdict?: string;
+      fallback_action?: string | null;
+    }
+  | { type: "diagnosis.completed"; timestamp: string; result: DiagnosisResult }
+  | { type: "diagnosis.degraded"; timestamp: string; result: DiagnosisResult }
+  | { type: "diagnosis.cancelled"; timestamp: string }
+  | { type: "human.reviewed"; timestamp: string; review: ReviewState };
+
+export interface ReviewState {
+  status: "unreviewed" | "confirmed" | "corrected" | "expert_review_requested";
+  ground_truth?: { root_cause: string } | null;
+  notes?: string;
+  reviewed_at?: string;
+}
+
+export interface DiagnosisSession {
+  session_id: string;
+  status: "running" | "success" | "degraded" | "cancelled";
+  preflight_id?: string;
+  dossier_id?: string | null;
+  result?: DiagnosisResult | null;
+  review: ReviewState;
+  input?: DiagnosisResult["input"];
+  events_url: string;
+}
+
+export interface DemoExample {
+  alarm_filename: string;
+  alarm_content: string;
+  topology_filename: string;
+  topology: BusinessTopology;
+  expected: {
+    root_cause: string;
+    minimum_alarm_coverage: number;
+    expected_affected_devices: string[];
+  };
+}
+
 export interface Dossier {
   dossier_id: string;
   session_id: string;
-  input_layer: {
-    filename?: string;
-    topology?: Record<string, any>;
-    submitted_at?: string;
-  };
+  input_layer: { filename?: string; topology?: BusinessTopology; submitted_at?: string };
   intermediate_layer: {
     hypotheses: RootCauseCandidate[];
-    validation_results: any[];
-    scores: number[][];
-    critic_challenges: any[];
     evidence_graph: EvidenceGraph;
   };
   output_layer: {
     root_cause: RootCauseCandidate | null;
     confidence: number;
     requires_human_review: boolean;
-    suggested_action: string;
   };
   feedback_layer: {
     human_decision?: string | null;
     human_notes?: string | null;
-    ground_truth?: Record<string, any> | null;
+    ground_truth?: { root_cause: string } | null;
   };
   metadata: {
     critic_verdict?: string | null;

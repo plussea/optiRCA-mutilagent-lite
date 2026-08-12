@@ -147,28 +147,29 @@ class SQLiteStore:
             return None
         return json.loads(row[0])
 
-    def add_event(self, session_id: str, phase: str, payload: Dict[str, Any]) -> None:
+    def add_event(self, session_id: str, phase: str, payload: Dict[str, Any]) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO events(session_id, phase, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (session_id, phase, json.dumps(payload, ensure_ascii=False), now),
             )
+            return int(cursor.lastrowid)
 
-    def list_events(self, session_id: str) -> List[Dict[str, Any]]:
+    def list_events(self, session_id: str, after_id: int = 0) -> List[Dict[str, Any]]:
         with sqlite3.connect(self.path) as conn:
             rows = conn.execute(
                 """
-                SELECT phase, payload_json, created_at
+                SELECT id, phase, payload_json, created_at
                 FROM events
-                WHERE session_id = ?
+                WHERE session_id = ? AND id > ?
                 ORDER BY id ASC
                 """,
-                (session_id,),
+                (session_id, after_id),
             ).fetchall()
         return [
-            {"phase": phase, "payload": json.loads(payload), "created_at": created_at}
-            for phase, payload, created_at in rows
+            {"id": event_id, "phase": phase, "payload": json.loads(payload), "created_at": created_at}
+            for event_id, phase, payload, created_at in rows
         ]
 
 
