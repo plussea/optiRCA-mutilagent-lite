@@ -48,20 +48,28 @@ class FeatureScorer:
         upstream = round(min(len(covered_alarms) / max(total_alarms, 1), 1.0), 3)
 
         # time_lead: earliest alarm timestamp compared to candidate (simplified)
-        time_lead = 0.5
+        covered_alarm_nodes = [a for a in alarms.values() if a.id in covered_alarms]
         timestamps = [
             a.properties.get("timestamp", "")
-            for a in alarms.values()
+            for a in covered_alarm_nodes
             if a.properties.get("timestamp")
         ]
-        if timestamps:
-            time_lead = 0.9 if len(timestamps) >= 2 and self._time_spread(timestamps) <= 2 else 0.6
+        time_lead = 0.9 if len(timestamps) >= 2 and self._time_spread(timestamps) <= 2 else 0.6
 
         # coverage: fraction of total alarms in the candidate chain
         coverage = round(min(len(evidence_chain) / max(total_alarms + 1, 1), 1.0), 3)
 
         # priority: severity of covered alarms
-        severity_scores = {"critical": 1.0, "major": 0.75, "minor": 0.5, "warning": 0.25}
+        severity_scores = {
+            "critical": 1.0,
+            "major": 0.75,
+            "minor": 0.5,
+            "warning": 0.25,
+            "紧急": 1.0,
+            "重要": 0.75,
+            "次要": 0.5,
+            "提示": 0.25,
+        }
         severities = [
             alarms[alarm_id].properties.get("severity", "").lower()
             for alarm_id in covered_alarms

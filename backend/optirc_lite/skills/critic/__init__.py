@@ -136,7 +136,7 @@ class RefactorCriticSkill:
             result = self._reject(multi_cluster_reason, "FALLBACK_TO_JUDGE")
         elif node_type == NodeType.LINK:
             alarms_a, alarms_b = graph.get_link_endpoint_alarms(root_cause)
-            los_types = {"los", "mut_los"}
+            los_types = {"los", "mut_los", "ots_los", "osc_los", "oms_los", "och_los"}
             a_has_los = any(
                 graph.get_node(a).properties.get("alarm_type", "").lower() in los_types
                 for a in alarms_a

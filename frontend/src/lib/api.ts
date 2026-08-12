@@ -1,11 +1,13 @@
-import type { SessionState, WorkflowEvent } from "./types";
+import type { DiagnosisResult, Dossier } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8010";
 
-export async function createSession(file: File): Promise<{ session_id: string; status: string }> {
+export async function diagnose(alarms: File, topology: object): Promise<DiagnosisResult> {
   const form = new FormData();
-  form.append("file", file);
-  const response = await fetch(`${API_URL}/v1/sessions`, {
+  form.append("alarms", alarms);
+  form.append("topology", JSON.stringify(topology));
+
+  const response = await fetch(`${API_URL}/api/v1/diagnose`, {
     method: "POST",
     body: form,
   });
@@ -15,31 +17,12 @@ export async function createSession(file: File): Promise<{ session_id: string; s
   return response.json();
 }
 
-export async function createDemoSession(): Promise<{ session_id: string; status: string }> {
-  const response = await fetch(`${API_URL}/v1/demo-session`, {
-    method: "POST",
-  });
+export async function fetchDossier(dossierId: string): Promise<Dossier> {
+  const response = await fetch(`${API_URL}/v1/dossier/${dossierId}`);
   if (!response.ok) {
     throw new Error(await response.text());
   }
   return response.json();
-}
-
-export async function fetchSession(sessionId: string): Promise<SessionState> {
-  const response = await fetch(`${API_URL}/v1/sessions/${sessionId}`);
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return response.json();
-}
-
-export async function fetchEvents(sessionId: string): Promise<WorkflowEvent[]> {
-  const response = await fetch(`${API_URL}/v1/sessions/${sessionId}/events`);
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  const body = await response.json();
-  return body.events ?? [];
 }
 
 export async function submitDecision(

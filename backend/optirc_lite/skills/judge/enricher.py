@@ -1,5 +1,6 @@
 """LLM-based hypothesis enrichment with rule fallback."""
 
+import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,8 @@ class LLMHypothesisEnricher:
     candidates unchanged (graceful rule fallback).
     """
 
+    LLM_TIMEOUT_SECONDS = 8.0
+
     async def enrich(
         self,
         candidates: List[Dict[str, Any]],
@@ -29,11 +32,14 @@ class LLMHypothesisEnricher:
 
         prompt = self._build_prompt(candidates, state)
         try:
-            result = await tools.call(  # type: ignore[union-attr]
-                "llm.generate_json",
-                system=self._system_prompt(),
-                user=prompt,
-                temperature=0.2,
+            result = await asyncio.wait_for(
+                tools.call(  # type: ignore[union-attr]
+                    "llm.generate_json",
+                    system=self._system_prompt(),
+                    user=prompt,
+                    temperature=0.2,
+                ),
+                timeout=self.LLM_TIMEOUT_SECONDS,
             )
         except Exception:
             return candidates

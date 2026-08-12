@@ -22,11 +22,12 @@ class AlarmPerceptionSkill:
         rows: List[Dict[str, Any]] = parsed["rows"]
         first = rows[0] if rows else {}
 
-        alarm_col = self._pick(first, ["alarm_type", "alarm_name", "名称", "告警名称", "name"])
-        device_col = self._pick(first, ["device_id", "device", "source", "告警源", "网元", "ne_id"])
-        location_col = self._pick(first, ["location", "定位信息", "description", "desc"])
-        time_col = self._pick(first, ["timestamp", "time", "时间", "告警时间"])
-        severity_col = self._pick(first, ["severity", "级别", "level"])
+        alarm_col = self._pick(first, ["alarm_type", "alarm_name", "名称", "告警名称", "name"], fallback=True)
+        device_col = self._pick(first, ["device_id", "device", "source", "告警源", "网元", "设备", "ne_id"], fallback=True)
+        port_col = self._pick(first, ["port_id", "port", "端口", "port_name"], fallback=False)
+        location_col = self._pick(first, ["location", "定位信息", "description", "desc"], fallback=True)
+        time_col = self._pick(first, ["timestamp", "time", "时间", "告警时间", "最近发生时间"], fallback=True)
+        severity_col = self._pick(first, ["severity", "级别", "告警级别", "level"], fallback=True)
 
         alarms = []
         alarm_types = []
@@ -39,13 +40,15 @@ class AlarmPerceptionSkill:
             if device and device not in devices:
                 devices.append(device)
 
+            port_id = str(row.get(port_col, "")).strip() if port_col else ""
+
             alarms.append({
                 "alarm_id": f"ALM-{idx:04d}",
                 "type": alarm,
                 "severity": str(row.get(severity_col, "")).strip() if severity_col else "",
                 "timestamp": str(row.get(time_col, "")).strip() if time_col else "",
                 "device_id": device,
-                "port_id": "",
+                "port_id": port_id,
                 "raw_text": str(row),
             })
 
@@ -70,11 +73,13 @@ class AlarmPerceptionSkill:
         }
 
     @staticmethod
-    def _pick(row: Dict[str, Any], candidates: List[str]) -> str | None:
+    def _pick(row: Dict[str, Any], candidates: List[str], fallback: bool = True) -> str | None:
         lowered = {key.lower(): key for key in row.keys()}
         for candidate in candidates:
             if candidate in row:
                 return candidate
             if candidate.lower() in lowered:
                 return lowered[candidate.lower()]
-        return next(iter(row.keys()), None) if row else None
+        if fallback:
+            return next(iter(row.keys()), None) if row else None
+        return None

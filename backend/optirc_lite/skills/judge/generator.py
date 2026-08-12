@@ -37,20 +37,32 @@ class ChainHypothesisGenerator:
                     alarm_type = alarm.properties.get("alarm_type", "alarm")
                     chain_alarms.append(f"{alarm_type} @ {endpoint}")
 
-            if chain_alarms:
-                seen.add(key)
-                candidates.append(
-                    {
-                        "root_cause": key,
-                        "confidence": 0.8,
-                        "score_vector": [],
-                        "evidence_chain": [
-                            f"candidate root cause: {key}",
-                            f"endpoints: {link.properties.get('endpoint_a') or '-'} / {link.properties.get('endpoint_b') or '-'}",
-                            *chain_alarms,
-                        ],
-                    }
-                )
+            # Score link candidates: favor links whose endpoint alarms include
+            # the most severe physical-layer LOS pair (OTS/OSC/MUT_LOS).
+            endpoint_alarm_types = {item.split(" @ ")[0].lower() for item in chain_alarms}
+            physical_los_count = sum(
+                1 for t in endpoint_alarm_types if "los" in t and ("ots" in t or "osc" in t or "mut_los" in t)
+            )
+            if physical_los_count >= 2:
+                confidence = 0.95
+            elif any("los" in t for t in endpoint_alarm_types):
+                confidence = 0.8
+            else:
+                confidence = 0.7
+
+            seen.add(key)
+            candidates.append(
+                {
+                    "root_cause": key,
+                    "confidence": confidence,
+                    "score_vector": [],
+                    "evidence_chain": [
+                        f"candidate root cause: {key}",
+                        f"endpoints: {link.properties.get('endpoint_a') or '-'} / {link.properties.get('endpoint_b') or '-'}",
+                        *chain_alarms,
+                    ],
+                }
+            )
 
         # Device candidates for any alarm-bearing device not already covered by a link.
         for device in devices:

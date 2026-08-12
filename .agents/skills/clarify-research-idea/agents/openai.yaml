@@ -1,0 +1,4 @@
+interface:
+  display_name: "研究 Idea 明确化"
+  short_description: "用启发式追问打磨可验证的论文级 Idea"
+  default_prompt: "使用 $clarify-research-idea 通过启发式追问，帮我把这个初步研究方向明确为可验证的论文 Idea。"

@@ -1,5 +1,6 @@
 """LLM-based counterfactual reasoning for the Critic."""
 
+import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,8 @@ class LLMCounterfactualReviewer:
     or fails, the original reject result is returned unchanged.
     """
 
+    LLM_TIMEOUT_SECONDS = 8.0
+
     async def review(
         self,
         verdict: str,
@@ -31,11 +34,14 @@ class LLMCounterfactualReviewer:
 
         prompt = self._build_prompt(verdict, reasons, fallback_action, state)
         try:
-            result = await tools.call(  # type: ignore[union-attr]
-                "llm.generate_json",
-                system=self._system_prompt(),
-                user=prompt,
-                temperature=0.2,
+            result = await asyncio.wait_for(
+                tools.call(  # type: ignore[union-attr]
+                    "llm.generate_json",
+                    system=self._system_prompt(),
+                    user=prompt,
+                    temperature=0.2,
+                ),
+                timeout=self.LLM_TIMEOUT_SECONDS,
             )
         except Exception:
             return self._wrap(verdict, reasons, fallback_action, None)

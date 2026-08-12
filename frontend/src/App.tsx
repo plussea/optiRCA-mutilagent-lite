@@ -1,62 +1,33 @@
-import { useEffect, useRef, useState } from "react";
-import { createDemoSession, createSession, fetchEvents, fetchSession, submitDecision } from "./lib/api";
-import type { SessionState, WorkflowEvent } from "./lib/types";
-import { AuditTrail } from "./components/AuditTrail";
-import { NodeInspector } from "./components/NodeInspector";
-import { ReportPanel } from "./components/ReportPanel";
-import { ReviewPanel } from "./components/ReviewPanel";
-import { UploadCard } from "./components/UploadCard";
-import { WorkflowGraph } from "./components/WorkflowGraph";
-
-const terminalStatuses = new Set(["waiting_review", "closed", "rejected", "escalated", "error"]);
+import { useState } from "react";
+import { diagnose } from "./lib/api";
+import { runDemoDiagnose } from "./lib/demo";
+import type { DiagnosisResult } from "./lib/types";
+import { ConclusionBar } from "./components/ConclusionBar";
+import { EvidenceGraphView } from "./components/EvidenceGraphView";
+import { RightDrawer } from "./components/RightDrawer";
+import { StageTimeline, useStagePlayback } from "./components/StageTimeline";
+import { TopologyInput } from "./components/TopologyInput";
 
 export function App() {
-  const [state, setState] = useState<SessionState | null>(null);
-  const [events, setEvents] = useState<WorkflowEvent[]>([]);
-  const [selectedNode, setSelectedNode] = useState("perception");
+  const [result, setResult] = useState<DiagnosisResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [topologyInput, setTopologyInput] = useState(
+    JSON.stringify({ devices: [], ports: [], links: [] }, null, 2),
+  );
 
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
-    };
-  }, []);
-
-  async function refresh(sessionId: string) {
-    const [nextState, nextEvents] = await Promise.all([fetchSession(sessionId), fetchEvents(sessionId)]);
-    setState(nextState);
-    setEvents(nextEvents);
-    return nextState;
-  }
-
-  function startPolling(sessionId: string) {
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    pollRef.current = window.setInterval(async () => {
-      try {
-        const next = await refresh(sessionId);
-        if (terminalStatuses.has(next.status)) {
-          if (pollRef.current) window.clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-        if (pollRef.current) window.clearInterval(pollRef.current);
-      }
-    }, 900);
-  }
+  const { currentStage, playing, seek, play, pause, replay } = useStagePlayback(result);
 
   async function handleUpload(file: File) {
     setBusy(true);
     setError(null);
-    setEvents([]);
-    setState(null);
-    setSelectedNode("perception");
+    setResult(null);
+    setSelectedId(null);
     try {
-      const created = await createSession(file);
-      await refresh(created.session_id);
-      startPolling(created.session_id);
+      const topology = JSON.parse(topologyInput);
+      const response = await diagnose(file, topology);
+      setResult(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -67,27 +38,15 @@ export function App() {
   async function handleRunDemo() {
     setBusy(true);
     setError(null);
-    setEvents([]);
-    setState(null);
-    setSelectedNode("perception");
+    setResult(null);
+    setSelectedId(null);
     try {
-      const created = await createDemoSession();
-      await refresh(created.session_id);
-      startPolling(created.session_id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDecision(decision: "approved" | "rejected" | "escalated", notes: string) {
-    if (!state) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await submitDecision(state.session_id, decision, notes);
-      await refresh(state.session_id);
+      const response = await runDemoDiagnose();
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const body: DiagnosisResult = await response.json();
+      setResult(body);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -96,35 +55,73 @@ export function App() {
   }
 
   return (
-    <main className="runtime-grid min-h-screen overflow-hidden bg-mist">
-      <div className="pointer-events-none fixed -left-32 -top-32 h-96 w-96 rounded-full bg-brand/20 blur-3xl" />
-      <div className="pointer-events-none fixed -bottom-40 right-0 h-96 w-96 rounded-full bg-cyanline/20 blur-3xl" />
-      <div className="relative mx-auto max-w-[1540px] space-y-6 px-6 py-8">
-        <UploadCard busy={busy} onUpload={handleUpload} onRunDemo={handleRunDemo} />
-        {error && (
-          <div className="rounded-2xl border border-rose-400/40 bg-rose-950/60 p-4 text-sm text-rose-100">
-            {error}
-          </div>
-        )}
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-950 text-slate-200">
+      <ConclusionBar
+        result={result}
+        busy={busy}
+        onUpload={handleUpload}
+        onRunDemo={handleRunDemo}
+        onOpenReview={() => {}}
+      />
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
-          <WorkflowGraph
-            state={state}
-            events={events}
-            selectedNode={selectedNode}
-            onSelectNode={setSelectedNode}
-          />
-          <NodeInspector state={state} events={events} selectedNode={selectedNode} />
-        </div>
+      <StageTimeline
+        result={result}
+        currentStage={currentStage}
+        playing={playing}
+        onPlay={play}
+        onPause={pause}
+        onSeek={seek}
+        onReplay={replay}
+      />
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
-          <ReportPanel state={state} />
-          <div className="space-y-6">
-            <ReviewPanel state={state} onDecision={handleDecision} />
-            <AuditTrail events={events} />
-          </div>
-        </div>
+      <div className="relative flex min-h-0 flex-1">
+        <main className="relative flex min-h-0 flex-1 flex-col">
+          {!result ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-slate-100">OptiRCA Lite</p>
+                <p className="mt-2 text-sm text-slate-400">
+                  上传告警 CSV 与拓扑 JSON，或运行 Demo 查看智能根因诊断。
+                </p>
+              </div>
+              <TopologyInput value={topologyInput} onChange={setTopologyInput} />
+              {error && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                  {error}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="pointer-events-none absolute left-4 top-4 z-10 max-w-sm rounded-xl border border-slate-700/60 bg-slate-900/80 p-3 backdrop-blur"
+              >
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  拓扑输入（JSON）
+                </p>
+                <TopologyInput compact value={topologyInput} onChange={setTopologyInput} />
+              </div>
+              <EvidenceGraphView
+                graph={result.evidence_graph}
+                rootCause={
+                  result.root_cause && "root_cause" in result.root_cause
+                    ? result.root_cause.root_cause
+                    : undefined
+                }
+                currentStage={currentStage}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+              {error && (
+                <div className="absolute bottom-4 left-4 z-10 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                  {error}
+                </div>
+              )}
+            </>
+          )}
+        </main>
+
+        <RightDrawer result={result} selectedId={selectedId} />
       </div>
-    </main>
+    </div>
   );
 }

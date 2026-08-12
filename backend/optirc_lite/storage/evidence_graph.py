@@ -235,7 +235,8 @@ class EvidenceGraph:
 
         For a device, includes alarms on the device itself and on its ports.
         For a port, includes alarms on the port itself.
-        For a link, includes alarms on both endpoint ports/devices.
+        For a link, includes alarms on both endpoint ports/devices, and downstream
+        alarms propagated from the receiver-side device following directed ports.
         """
         node_type, _ = self.parse_node_id(node_id)
         if node_type is None:
@@ -248,30 +249,96 @@ class EvidenceGraph:
         belongs = {e.source: e.target for e in edges if e.type == EdgeType.BELONGS_TO}
         topo = [e for e in edges if e.type == EdgeType.TOPOLOGY]
 
-        covered: Set[str] = set()
+        # Build a quick topology adjacency map.
+        topo_adj: Dict[str, Set[str]] = {}
+        for edge in topo:
+            topo_adj.setdefault(edge.source, set()).add(edge.target)
+            topo_adj.setdefault(edge.target, set()).add(edge.source)
+
+        direct_covered: Set[str] = set()
+        downstream_covered: Set[str] = set()
+
+        def device_for_port(port_node: EvidenceNode) -> Optional[str]:
+            device_id = port_node.properties.get("device_id")
+            if device_id:
+                return device_id if device_id.startswith("dev:") else f"dev:{device_id}"
+            # Fall back to topology edges.
+            for neighbor in topo_adj.get(port_node.id, set()):
+                if neighbor.startswith("dev:"):
+                    return neighbor
+            return None
+
+        def downstream_from_device(start_device: str, forbidden_link: str) -> Set[str]:
+            """Walk the directed topology away from a failed link.
+
+            Follows device -> out-ports -> links -> in-ports -> devices so that
+            a single upstream fiber-cut can explain downstream LOS alarms.
+            """
+            visited: Set[str] = set()
+            frontier = {start_device}
+            while frontier:
+                current = frontier.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                current_node = nodes.get(current)
+                if not current_node:
+                    continue
+                if current_node.type == NodeType.DEVICE:
+                    for neighbor in topo_adj.get(current, set()):
+                        neighbor_node = nodes.get(neighbor)
+                        if not neighbor_node or neighbor_node.type != NodeType.PORT:
+                            continue
+                        direction = str(neighbor_node.properties.get("direction", "")).lower()
+                        if direction == "out" or not direction:
+                            frontier.add(neighbor)
+                elif current_node.type == NodeType.PORT:
+                    for neighbor in topo_adj.get(current, set()):
+                        neighbor_node = nodes.get(neighbor)
+                        if not neighbor_node:
+                            continue
+                        if neighbor_node.type == NodeType.DEVICE:
+                            frontier.add(neighbor)
+                        elif neighbor_node.type == NodeType.LINK and neighbor != forbidden_link:
+                            frontier.add(neighbor)
+                elif current_node.type == NodeType.LINK:
+                    for neighbor in topo_adj.get(current, set()):
+                        neighbor_node = nodes.get(neighbor)
+                        if neighbor_node and neighbor_node.type == NodeType.PORT:
+                            frontier.add(neighbor)
+            return visited
+
+        def is_propagated_alarm(alarm: EvidenceNode) -> bool:
+            """True for higher-layer LOS alarms that can be downstream of a fiber cut.
+
+            Direct physical-layer LOS (OTS/OSC/MUT_LOS) must be observed on the
+            failed link itself; OMS/OCH losses can be propagated symptoms.
+            """
+            alarm_type = alarm.properties.get("alarm_type", "").lower()
+            return "los" in alarm_type and not any(direct in alarm_type for direct in ("mut_los", "ots_los", "osc_los"))
 
         if node_type == NodeType.DEVICE:
-            covered.add(node_id)
+            direct_covered.add(node_id)
             _, local_id = self.parse_node_id(node_id)
             # Topology-linked ports
             for edge in topo:
                 if edge.source == node_id:
-                    covered.add(edge.target)
+                    direct_covered.add(edge.target)
                 elif edge.target == node_id:
-                    covered.add(edge.source)
+                    direct_covered.add(edge.source)
             # Ports that declare this device as their parent even without a topology edge
             for node in nodes.values():
                 if node.type == NodeType.PORT and node.properties.get("device_id") == local_id:
-                    covered.add(node.id)
+                    direct_covered.add(node.id)
 
         elif node_type == NodeType.PORT:
-            covered.add(node_id)
+            direct_covered.add(node_id)
             # Include topology-linked neighbors (parent device, attached link)
             for edge in topo:
                 if edge.source == node_id:
-                    covered.add(edge.target)
+                    direct_covered.add(edge.target)
                 elif edge.target == node_id:
-                    covered.add(edge.source)
+                    direct_covered.add(edge.source)
 
         elif node_type == NodeType.LINK:
             link_node = nodes.get(node_id)
@@ -280,18 +347,32 @@ class EvidenceGraph:
                     link_node.properties.get("endpoint_a"),
                     link_node.properties.get("endpoint_b"),
                 }
+                receiver_devices: Set[str] = set()
                 for endpoint in endpoints:
                     if not endpoint:
                         continue
                     port_id = f"port:{endpoint}"
-                    covered.add(port_id)
-                    for edge in topo:
-                        if edge.source == port_id:
-                            covered.add(edge.target)
-                        elif edge.target == port_id:
-                            covered.add(edge.source)
+                    direct_covered.add(port_id)
+                    port_node = nodes.get(port_id)
+                    if port_node:
+                        dev_id = device_for_port(port_node)
+                        if dev_id:
+                            direct_covered.add(dev_id)
+                            direction = str(port_node.properties.get("direction", "")).lower()
+                            if direction == "in" or not direction:
+                                receiver_devices.add(dev_id)
+                # A fiber cut propagates downstream from the receiver-side device.
+                for dev_id in receiver_devices:
+                    downstream_covered |= downstream_from_device(dev_id, node_id)
 
-        alarm_ids = {alarm_id for alarm_id, target in belongs.items() if target in covered}
+        alarm_ids: Set[str] = set()
+        for alarm_id, target in belongs.items():
+            if target in direct_covered:
+                alarm_ids.add(alarm_id)
+            elif target in downstream_covered:
+                alarm = nodes.get(alarm_id)
+                if alarm and is_propagated_alarm(alarm):
+                    alarm_ids.add(alarm_id)
         return [nodes[alarm_id] for alarm_id in alarm_ids if alarm_id in nodes]
 
     def get_neighbors_by_type(
@@ -354,6 +435,7 @@ class EvidenceGraph:
         Multi-cluster results suggest a possible multi-root-cause scenario.
         """
         data = self._read()
+        nodes = {n["id"]: EvidenceNode.from_dict({**n}) for n in data.get("nodes", [])}
         edges = [EvidenceEdge.from_dict({**e}) for e in data.get("edges", [])]
 
         belongs = {e.source: e.target for e in edges if e.type == EdgeType.BELONGS_TO}
@@ -365,8 +447,23 @@ class EvidenceGraph:
             topo_adj.setdefault(edge.source, set()).add(edge.target)
             topo_adj.setdefault(edge.target, set()).add(edge.source)
 
-        # Union-find over anchors that actually carry alarms.
+        # Union-find over anchors that actually carry alarms, plus the parent
+        # devices of port anchors so same-device ports cluster together.
         anchors: Set[str] = set(belongs.values())
+
+        # Map port anchors to their parent device.
+        port_to_device: Dict[str, str] = {}
+        for node in nodes.values():
+            if node.type == NodeType.PORT:
+                device_id = node.properties.get("device_id")
+                if device_id:
+                    port_to_device[node.id] = device_id if device_id.startswith("dev:") else f"dev:{device_id}"
+
+        # Ensure device anchors exist in the union-find universe for ports.
+        for port_id, dev_id in port_to_device.items():
+            if port_id in anchors:
+                anchors.add(dev_id)
+
         parent = {anchor: anchor for anchor in anchors}
 
         def find(x: str) -> str:
@@ -384,6 +481,9 @@ class EvidenceGraph:
             for neighbor in topo_adj.get(anchor, set()):
                 if neighbor in anchors:
                     union(anchor, neighbor)
+            # Merge ports that belong to the same device.
+            if anchor in port_to_device:
+                union(anchor, port_to_device[anchor])
 
         clusters: Dict[str, Set[str]] = {}
         for alarm_id, anchor in belongs.items():

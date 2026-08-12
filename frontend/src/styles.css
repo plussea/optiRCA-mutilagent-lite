@@ -3,10 +3,9 @@
 @tailwind utilities;
 
 :root {
-  color: #e5eefc;
-  background: #08111f;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  color: #e2e8f0;
+  background: #0b1120;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
 }
 
@@ -15,21 +14,21 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 20% 10%, rgba(86, 113, 255, 0.18), transparent 32rem),
-    radial-gradient(circle at 85% 18%, rgba(42, 211, 255, 0.14), transparent 28rem),
-    linear-gradient(135deg, #07101e 0%, #0b1424 48%, #070b13 100%);
+    radial-gradient(circle at 12% 8%, rgba(14, 165, 233, 0.12), transparent 30rem),
+    radial-gradient(circle at 88% 12%, rgba(56, 189, 248, 0.08), transparent 28rem),
+    linear-gradient(135deg, #0b1120 0%, #111827 48%, #0f172a 100%);
 }
 
 .glass {
-  background: linear-gradient(145deg, rgba(16, 29, 49, 0.78), rgba(9, 17, 31, 0.88));
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.72);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(56, 189, 248, 0.18);
 }
 
 .runtime-grid {
   background-image:
-    linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+    linear-gradient(rgba(56, 189, 248, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.06) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -51,9 +50,79 @@ body {
 @keyframes node-breathe {
   0%,
   100% {
-    box-shadow: 0 0 22px rgba(56, 213, 255, 0.15);
+    box-shadow: 0 0 18px rgba(14, 165, 233, 0.2);
   }
   50% {
-    box-shadow: 0 0 42px rgba(124, 140, 255, 0.34);
+    box-shadow: 0 0 34px rgba(2, 132, 199, 0.42);
   }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(244, 63, 94, 0);
+  }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* React Flow theming - dark industrial */
+.react-flow__node {
+  border: none !important;
+  background: transparent !important;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}
+
+.react-flow__controls {
+  box-shadow: 0 4px 20px rgba(2, 132, 199, 0.18) !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: rgba(30, 41, 59, 0.9) !important;
+  border-bottom-color: rgba(56, 189, 248, 0.15) !important;
+  color: #94a3b8 !important;
+}
+
+.react-flow__controls-button:hover {
+  background: rgba(14, 165, 233, 0.15) !important;
+  color: #38bdf8 !important;
+}
+
+.react-flow__minimap {
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(2, 132, 199, 0.15) !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(15, 23, 42, 0.6) !important;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.25);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.45);
 }

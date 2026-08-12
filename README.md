@@ -90,7 +90,7 @@ LLM_MODEL=your-model-name
 - 离线回归指标与错误归因（Evaluator）。
 - 遗传-帕累托策略优化器（GEPA）。
 - OpenAI-compatible LLM Tool，失败时自动回退到启发式诊断/规划。
-- Runtime Trace 前端展示。
+- 前端通过 `POST /api/v1/diagnose` 同步诊断，支持证据图与 Agent 流程双视图可视化，并可在结果页直接提交人工审核。
 
 ## API 速查
 
