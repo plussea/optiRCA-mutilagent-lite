@@ -53,7 +53,7 @@ GEPA 染色体中的 `cases` 段控制 Ranker 在计算 `case_sim` 特征时使�
 ## 相关
 
 - `CONTEXT.md` → Ubiquitous language（GEPA、Diagnosis Dossier）
-- `project_prd_refactor.md` → 4.9.1 染色体编码
+- `docs/product/project_prd_refactor.md` → 4.9.1 染色体编码
 - `docs/adr/0004-gepa-chromosome-and-hyperparameters.md` → 染色体整体结构
 
 ## 备注

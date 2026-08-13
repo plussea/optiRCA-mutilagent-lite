@@ -41,7 +41,7 @@
 ## 相关
 
 - `CONTEXT.md` → Agent taxonomy、Core decisions
-- `project_prd_refactor.md` → 4.6 Critic Reviewer、6.1 在线诊断主链路
+- `docs/product/project_prd_refactor.md` → 4.6 Critic Reviewer、6.1 在线诊断主链路
 - `docs/adr/0003-critic-gate-with-fallback-limit.md` → 全量复核指标与回退策略
 
 ## 备注

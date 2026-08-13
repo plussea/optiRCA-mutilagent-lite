@@ -43,7 +43,7 @@ Propagation Judge 与 Root Cause Ranker 是诊断链路中负载最高的两个�
 ## 相关
 
 - `CONTEXT.md` → Agent taxonomy
-- `project_prd_refactor.md` → 4.4、4.5 模块详细设计
+- `docs/product/project_prd_refactor.md` → 4.4、4.5 模块详细设计
 - `docs/adr/0001-shared-blackboard-over-direct-calls.md` → 共享黑板约束不适用于同一 Agent 内部的子模块通信
 
 ## 备注

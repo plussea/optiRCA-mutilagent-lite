@@ -1,5 +1,0 @@
-告警源,名称,定位信息,级别
-NE-OTN-01,MUT_LOS,西城核心机房-ODF-12,critical
-NE-OTN-02,MUT_LOS,西城核心机房-ODF-12,critical
-NE-OTN-03,光功率异常,西城核心机房-ODF-12,major
-NE-OTN-04,业务中断,西城核心机房-ODF-12,critical

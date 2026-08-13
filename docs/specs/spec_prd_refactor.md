@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-The current optiRCA Lite workflow is a single-chain LangGraph pipeline (perception → diagnosis → validation → planning → human review). It lacks the architecture described in `project_prd_refactor.md`:
+The current optiRCA Lite workflow is a single-chain LangGraph pipeline (perception → diagnosis → validation → planning → human review). It lacks the architecture described in `docs/product/project_prd_refactor.md`:
 
 - There is no shared heterogeneous evidence graph acting as a blackboard between Agents.
 - The system does not separate perception, judgment, ranking, and criticism into distinct, observable Agents.

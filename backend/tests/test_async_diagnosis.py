@@ -15,12 +15,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _create_demo_preflight(client: TestClient) -> str:
-    with (PROJECT_ROOT / "demo" / "alarm1.csv").open("rb") as alarms:
+    with (PROJECT_ROOT / "demo" / "01" / "alarm.csv").open("rb") as alarms:
         response = client.post(
             "/api/v1/preflight",
-            files={"alarms": ("alarm1.csv", alarms, "text/csv")},
+            files={"alarms": ("alarm.csv", alarms, "text/csv")},
             data={
-                "topology": (PROJECT_ROOT / "demo" / "topology.json").read_text(
+                "topology": (PROJECT_ROOT / "demo" / "01" / "topology.json").read_text(
                     encoding="utf-8"
                 )
             },

@@ -42,7 +42,7 @@ Critic Reviewer 负责在最终输出前拦截伪根因。若 Critic 过于保�
 ## 相关
 
 - `CONTEXT.md` → Key quality targets
-- `project_prd_refactor.md` → 4.6 Critic Reviewer、6.2 质量门控与回退逻辑
+- `docs/product/project_prd_refactor.md` → 4.6 Critic Reviewer、6.2 质量门控与回退逻辑
 - `docs/adr/0002-judge-ranker-internal-submodules.md` → 回退目标 Agent 定义
 
 ## 备注

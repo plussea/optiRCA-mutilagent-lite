@@ -1,0 +1,5 @@
+{
+  "root_cause": "link:N1-N2",
+  "minimum_alarm_coverage": 1.0,
+  "expected_affected_devices": ["N2"]
+}

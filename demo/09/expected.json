@@ -1,0 +1,5 @@
+{
+  "root_cause": "dev:N3",
+  "minimum_alarm_coverage": 1.0,
+  "expected_affected_devices": ["N3"]
+}

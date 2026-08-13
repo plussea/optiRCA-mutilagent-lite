@@ -872,11 +872,11 @@ async def review_async_diagnosis(
 
 @app.get("/api/v1/examples/demo")
 async def get_demo_example() -> Dict[str, Any]:
-    demo_dir = Path(__file__).resolve().parents[3] / "demo"
+    demo_dir = Path(__file__).resolve().parents[3] / "demo" / "01"
     try:
         return {
-            "alarm_filename": "alarm1.csv",
-            "alarm_content": (demo_dir / "alarm1.csv").read_text(encoding="utf-8-sig"),
+            "alarm_filename": "alarm.csv",
+            "alarm_content": (demo_dir / "alarm.csv").read_text(encoding="utf-8-sig"),
             "topology_filename": "topology.json",
             "topology": json.loads((demo_dir / "topology.json").read_text(encoding="utf-8")),
             "expected": json.loads((demo_dir / "expected.json").read_text(encoding="utf-8")),

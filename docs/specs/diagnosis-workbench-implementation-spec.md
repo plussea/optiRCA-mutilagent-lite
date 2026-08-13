@@ -8,7 +8,7 @@
 
 将当前前端改造为桌面端单样本诊断工作台，并同步补齐支撑该体验所需的后端能力。评审者应能上传一份告警 CSV、按需补充拓扑 JSON，在 30 秒内看到真实的多 Agent 执行过程，并通过业务拓扑、诊断结论、可信度检查和人工审核判断结果是否可信。
 
-当前 Demo 的业务验收目标是：使用仓库内 `demo/alarm1.csv` 与 `demo/topology.json`，稳定得到根因 `link:N1-N2`，并解释 8 条告警如何收敛为一个物理故障。
+当前 Demo 的业务验收目标是：使用仓库内 `demo/01/alarm.csv` 与 `demo/01/topology.json`，稳定得到根因 `link:N1-N2`，并解释 8 条告警如何收敛为一个物理故障。
 
 ## 2. 已确认的范围
 
@@ -372,9 +372,10 @@ Critic 不只显示 `pass/reject`，而是呈现：
 
 ```text
 demo/
-  alarm1.csv
-  topology.json
-  expected.json
+  01/
+    alarm.csv
+    topology.json
+    expected.json
 ```
 
 建议的 `expected.json`：

@@ -39,7 +39,7 @@
 ## 相关
 
 - `CONTEXT.md` → Agent taxonomy、共享黑板定义
-- `project_prd_refactor.md` → 3.2 架构要点、5.1 异构证据图 Schema
+- `docs/product/project_prd_refactor.md` → 3.2 架构要点、5.1 异构证据图 Schema
 
 ## 备注
 

@@ -14,8 +14,8 @@ client = TestClient(app)
 
 
 def _load_demo_assets():
-    demo_dir = Path(__file__).parent.parent.parent / "demo"
-    alarms = (demo_dir / "alarm1.csv").read_text(encoding="utf-8")
+    demo_dir = Path(__file__).parent.parent.parent / "demo" / "01"
+    alarms = (demo_dir / "alarm.csv").read_text(encoding="utf-8")
     topology = json.loads((demo_dir / "topology.json").read_text(encoding="utf-8"))
     return alarms, topology
 
@@ -65,7 +65,7 @@ def test_demo_can_run_three_times_without_cross_session_graph_pollution(tmp_path
         with csv_path.open("rb") as alarms_file:
             response = client.post(
                 "/api/v1/diagnose",
-                files={"alarms": ("alarm1.csv", alarms_file, "text/csv")},
+                files={"alarms": ("alarm.csv", alarms_file, "text/csv")},
                 data={"topology": json.dumps(topology, ensure_ascii=False)},
             )
 

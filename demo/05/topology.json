@@ -1,0 +1,25 @@
+{
+  "devices": [
+    { "device_id": "N1", "type": "OADM" },
+    { "device_id": "N2", "type": "OXC" },
+    { "device_id": "N3", "type": "OADM" },
+    { "device_id": "N4", "type": "OXC" },
+    { "device_id": "N5", "type": "OADM" }
+  ],
+  "ports": [
+    { "port_id": "N1:N1-N2", "device_id": "N1", "direction": "out" },
+    { "port_id": "N2:N1-N2", "device_id": "N2", "direction": "in" },
+    { "port_id": "N2:N2-N3", "device_id": "N2", "direction": "out" },
+    { "port_id": "N3:N2-N3", "device_id": "N3", "direction": "in" },
+    { "port_id": "N3:N3-N5", "device_id": "N3", "direction": "out" },
+    { "port_id": "N5:N3-N5", "device_id": "N5", "direction": "in" },
+    { "port_id": "N5:N5-N4", "device_id": "N5", "direction": "out" },
+    { "port_id": "N4:N5-N4", "device_id": "N4", "direction": "in" }
+  ],
+  "links": [
+    { "link_id": "N1-N2", "endpoint_a": "N1:N1-N2", "endpoint_b": "N2:N1-N2", "length_km": 7, "loss_db": 1.5 },
+    { "link_id": "N2-N3", "endpoint_a": "N2:N2-N3", "endpoint_b": "N3:N2-N3", "length_km": 13, "loss_db": 2.7 },
+    { "link_id": "N3-N5", "endpoint_a": "N3:N3-N5", "endpoint_b": "N5:N3-N5", "length_km": 62, "loss_db": 16.4 },
+    { "link_id": "N5-N4", "endpoint_a": "N5:N5-N4", "endpoint_b": "N4:N5-N4", "length_km": 8, "loss_db": 1.8 }
+  ]
+}

@@ -131,7 +131,7 @@ GEPA 仅优化文本化策略参数，不触及以下领域：
 ## 相关
 
 - `CONTEXT.md` → Agent taxonomy、Key quality targets
-- `project_prd_refactor.md` → 4.9 Strategy Optimizer (GEPA)
+- `docs/product/project_prd_refactor.md` → 4.9 Strategy Optimizer (GEPA)
 - `docs/adr/0003-critic-gate-with-fallback-limit.md` → Critic 指标进入 GEPA 适应度函数
 
 ## 备注

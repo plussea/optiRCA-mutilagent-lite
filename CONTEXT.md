@@ -128,8 +128,8 @@
 
 ## References
 
-- `project_prd_refactor.md` — 产品需求与模块详细设计
-- `spec_prd_refactor.md` — 重构 Spec 与测试 seams
-- `spec_gepa_optimizer.md` — GEPA/Evaluator/Archivist 详细 Spec
+- `docs/product/project_prd_refactor.md` — 产品需求与模块详细设计
+- `docs/specs/spec_prd_refactor.md` — 重构 Spec 与测试 seams
+- `docs/specs/spec_gepa_optimizer.md` — GEPA/Evaluator/Archivist 详细 Spec
 - `docs/agents/domain.md` — Agent 如何消费领域文档
 - `docs/agents/issue-tracker.md` — 问题追踪流程

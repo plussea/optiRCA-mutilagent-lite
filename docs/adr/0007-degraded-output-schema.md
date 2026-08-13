@@ -91,7 +91,7 @@
 ## 相关
 
 - `CONTEXT.md` → Ubiquitous language（规则基线）
-- `project_prd_refactor.md` → 4.1 Orchestrator、6.2 回退逻辑、8 非功能性需求
+- `docs/product/project_prd_refactor.md` → 4.1 Orchestrator、6.2 回退逻辑、8 非功能性需求
 - `docs/adr/0003-critic-gate-with-fallback-limit.md` → `max_fallback_exceeded` 降级原因
 - `docs/adr/0006-pipeline-light-review-boundary.md` → Critic 超时降级原因
 

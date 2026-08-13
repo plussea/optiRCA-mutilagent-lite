@@ -14,7 +14,7 @@ Single-context layout: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/
 
 ### Project-specific notes
 
-- The active refactor is tracked in `.tmp_issue9.md` through `.tmp_issue13.md`.
+- The active refactor snapshots are tracked in `docs/issues/issue-9.md` through `docs/issues/issue-13.md`.
 - Main API seams: `POST /api/v1/diagnose`, `GET /v1/dossier/{id}`, `POST /v1/evaluate`, `POST /v1/gepa`.
 - Tests live in `backend/tests/` and should remain green; run `python -m pytest tests/ -q` from `backend/`.
 - CodeGraph is enabled; prefer `codegraph_*` tools for structural queries.

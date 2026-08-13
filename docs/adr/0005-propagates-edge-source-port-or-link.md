@@ -37,7 +37,7 @@
 ## 相关
 
 - `CONTEXT.md` → Ubiquitous language（异构证据图、传播链）
-- `project_prd_refactor.md` → 5.1 异构证据图 Schema
+- `docs/product/project_prd_refactor.md` → 5.1 异构证据图 Schema
 - `docs/adr/0001-shared-blackboard-over-direct-calls.md` → 共享黑板 Schema 变更影响所有 Agent
 
 ## 备注
